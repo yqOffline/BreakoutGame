@@ -67,7 +67,7 @@ void Ball::CheckCollisionPaddle(Paddle& paddle)
 void Ball::CheckCollisionBricks(std::vector<Brick>& bricks, int& score)
 {
     for (auto& brick : bricks) {
-        if (brick.IsActive() && CheckCollisionCircleRec(position, radius, brick.GetBrick())) {
+        if (brick.IsActive() && CheckCollisionCircleRec(position, radius, brick.GetRectangle())) {
             brick.SetActive(false);
             score++;
 
@@ -76,9 +76,9 @@ void Ball::CheckCollisionBricks(std::vector<Brick>& bricks, int& score)
 
             // 调整球的位置，防止卡入砖块
             if (speed.y > 0) {
-                position.y = brick.GetBrick().y + brick.GetBrick().height + radius;
+                position.y = brick.GetRectangle().y + brick.GetRectangle().height + radius;
             } else {
-                position.y = brick.GetBrick().y - radius;
+                position.y = brick.GetRectangle().y - radius;
             }
 
             break; // 每帧只处理一个砖块，避免一帧内多碰撞

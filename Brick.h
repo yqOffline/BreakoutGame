@@ -13,7 +13,7 @@ public:
     void Draw();
     bool IsActive() { return active; }
     void SetActive(bool a) { active = a; }
-    Rectangle GetBrick() const {return rect;}
+    Rectangle GetRectangle() const {return rect;}
 };
 
 #endif

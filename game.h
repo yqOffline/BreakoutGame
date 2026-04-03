@@ -75,6 +75,8 @@ public:
 
     bool IsGameRunning() const;
     GameState GetState() const { return currentState; }
+    int GetHearts() const {return hearts;}
+    void SimulateBallDrop(){CheckBallHitRedLine();}
 };
 
 #endif
