@@ -4,7 +4,7 @@
 int main() {
     const int screenWidth = 800;
     const int screenHeight = 600;
-    InitWindow(screenWidth, screenHeight, "2DBREAKOUT！！！");
+    InitWindow(screenWidth, screenHeight, "2DBREAKOUT!!!");
     SetTargetFPS(60);
 
     // 创建游戏核心对象

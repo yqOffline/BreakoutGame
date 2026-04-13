@@ -125,7 +125,7 @@ void Game::CheckGameVictory() {
 void Game::HandleInput(Vector2 mousePos) {
     switch (currentState) {
         case GameState::MENU:
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) {
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)||IsKeyPressed(KEY_SPACE)) {
                 currentState = GameState::PLAYING;
                 ball.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
             }
@@ -157,13 +157,13 @@ void Game::HandleInput(Vector2 mousePos) {
                 currentState = GameState::PLAYING;
             }
             // 点击重启
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)) {
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)|| IsKeyPressed(KEY_R)) {
                 ResetGame();
             }
             break;
 
         case GameState::GAME_OVER:
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, gameOverRestartBtn)) {
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, gameOverRestartBtn)|| IsKeyPressed(KEY_SPACE)) {
                 ResetGame();
             }
             break;

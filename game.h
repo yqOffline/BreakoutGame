@@ -16,7 +16,7 @@ enum class GameState {  /*定义强类型枚举,预防枚举重名的情况*/
     MENU,       // 主菜单
     PLAYING,    // 游戏进行
     PAUSED,     // 暂停
-    GAME_OVER   // 游戏结束
+    GAME_OVER,   // 游戏结束
 };
 
 enum class PauseCause{
@@ -63,6 +63,7 @@ private:
     // 状态机当前状态
     GameState currentState;
     PauseCause pauseCause;
+
 
     // 私有方法
     void ResetBricks();
