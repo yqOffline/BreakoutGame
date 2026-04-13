@@ -12,11 +12,16 @@
 using json = nlohmann::json;
 
 // ======================== 【状态机核心】4种状态 ========================
-enum GameState {
+enum class GameState {  /*定义强类型枚举,预防枚举重名的情况*/
     MENU,       // 主菜单
     PLAYING,    // 游戏进行
     PAUSED,     // 暂停
     GAME_OVER   // 游戏结束
+};
+
+enum class PauseCause{
+    MANUAL_PAUSE,
+    LIFE_LOSS_PAUSE
 };
 
 class Game {
@@ -57,6 +62,7 @@ private:
 
     // 状态机当前状态
     GameState currentState;
+    PauseCause pauseCause;
 
     // 私有方法
     void ResetBricks();

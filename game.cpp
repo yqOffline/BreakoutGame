@@ -8,7 +8,7 @@ Game::Game(int screenWidth, int screenHeight)
       score(0),
       hearts(3),
       brickRowColors({ RED, ORANGE, YELLOW, GREEN, BLUE }),
-      currentState(MENU)  // 初始状态：菜单
+      currentState(GameState::MENU)  // 初始状态：菜单
 {
     // 加载配置
     std::ifstream f("config.json");
@@ -58,6 +58,9 @@ Game::Game(int screenWidth, int screenHeight)
     bgLoaded = (backgroundTex.id != 0);
     paddleLoaded = (paddleTex.id != 0);
 
+    //初始化暂停原因
+    this->pauseCause = PauseCause::MANUAL_PAUSE;
+
     ResetBricks();
 }
 
@@ -75,7 +78,7 @@ void Game::ResetGame() {
     ball.SetSpeed({ 0,0 });
     score = 0;
     hearts = config["game"]["initial_hearts"];
-    currentState = MENU;  // 回到菜单
+    currentState = GameState::MENU;  // 回到菜单
     ResetBricks();
 }
 
@@ -102,9 +105,10 @@ void Game::CheckBallHitRedLine() {
         ball.SetSpeed({ 0,0 });
 
         if (hearts <= 0) {
-            currentState = GAME_OVER;  // 状态切换：游戏结束
+            currentState = GameState::GAME_OVER;  // 状态切换：游戏结束
         } else {
-            currentState = PAUSED;     // 状态切换：暂停
+            currentState = GameState::PAUSED;     // 状态切换：暂停
+            pauseCause = PauseCause::LIFE_LOSS_PAUSE;
         }
     }
 }
@@ -112,7 +116,7 @@ void Game::CheckBallHitRedLine() {
 // ======================== 胜利检测 ========================
 void Game::CheckGameVictory() {
     if (score >= brickRows * brickCols) {
-        currentState = GAME_OVER;
+        currentState = GameState::GAME_OVER;
         ball.SetSpeed({ 0,0 });
     }
 }
@@ -120,27 +124,29 @@ void Game::CheckGameVictory() {
 // ======================== 【状态机】输入处理 ========================
 void Game::HandleInput(Vector2 mousePos) {
     switch (currentState) {
-        case MENU:
+        case GameState::MENU:
             if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) {
-                currentState = PLAYING;
+                currentState = GameState::PLAYING;
                 ball.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
             }
             break;
 
-        case PLAYING:
+        case GameState::PLAYING:
             // space 键 → 暂停
             if (IsKeyPressed(KEY_SPACE)) {
-                currentState = PAUSED;
+                currentState = GameState::PAUSED;
+                pauseCause = PauseCause::MANUAL_PAUSE;
             }
             break;
 
-        case PAUSED:
+        case GameState::PAUSED:
             // space → 继续游戏
-            if (IsKeyPressed(KEY_SPACE)) {
-                currentState = PLAYING;
+            if (IsKeyPressed(KEY_SPACE)||IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn)) {
+                currentState = GameState::PLAYING;
             }
             // 点击继续
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn)) {
+            
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn) || IsKeyPressed(KEY_SPACE)) && pauseCause == PauseCause::LIFE_LOSS_PAUSE) {
             // 把球放到挡板正上方（远离红线，避免二次碰撞）
                 float paddleCenterX = paddle.GetRectangle().x + paddle.GetRectangle().width / 2;
                 float paddleTopY = paddle.GetRectangle().y - ball.GetRadius() - 2;
@@ -148,7 +154,7 @@ void Game::HandleInput(Vector2 mousePos) {
                 // 设置球初始速度
                 ball.SetSpeed({ 2, -5 });
                 // 恢复游戏
-                currentState = PLAYING;
+                currentState = GameState::PLAYING;
             }
             // 点击重启
             if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)) {
@@ -156,7 +162,7 @@ void Game::HandleInput(Vector2 mousePos) {
             }
             break;
 
-        case GAME_OVER:
+        case GameState::GAME_OVER:
             if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, gameOverRestartBtn)) {
                 ResetGame();
             }
@@ -167,7 +173,7 @@ void Game::HandleInput(Vector2 mousePos) {
 // ======================== 【状态机】逻辑更新 ========================
 void Game::Update(float dt) {
     // 只有 PLAYING 状态才更新游戏逻辑
-    if (currentState != PLAYING) return;
+    if (currentState != GameState::PLAYING) return;
 
     ball.Move();
     ball.BounceEdge(GetScreenWidth(), GetScreenHeight());
@@ -207,7 +213,7 @@ void Game::Draw() {
     for (auto& b : bricks) b.Draw();
 
     // 红线
-    if (currentState == PLAYING) DrawRectangleRec(redLine, RED);
+    if (currentState == GameState::PLAYING) DrawRectangleRec(redLine, RED);
 
     // UI 文字
     DrawText(TextFormat("SCORE: %d", score), 10, 10, 20, BLUE);
@@ -215,12 +221,12 @@ void Game::Draw() {
 
     // ======================== 按状态绘制UI ========================
     switch (currentState) {
-        case MENU:
+        case GameState::MENU:
             DrawRectangleRec(startBtn, CheckCollisionPointRec(GetMousePosition(), startBtn) ? DARKGREEN : GREEN);
             DrawText("START GAME", startBtn.x + 12, startBtn.y + 15, 20, BLACK);
             break;
 
-        case PAUSED:
+        case GameState::PAUSED:
             DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.7f));
             DrawRectangleRec(continueBtn, CheckCollisionPointRec(GetMousePosition(), continueBtn) ? DARKBLUE : BLUE);
             DrawText("CONTINUE", continueBtn.x + 15, continueBtn.y + 15, 20, BLACK);
@@ -229,7 +235,7 @@ void Game::Draw() {
             DrawText("PAUSED", GetScreenWidth()/2 - 60, GetScreenHeight()/2 - 80, 40, WHITE);
             break;
 
-        case GAME_OVER:
+        case GameState::GAME_OVER:
             DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.8f));
             DrawText("GAME OVER", GetScreenWidth()/2 - 100, GetScreenHeight()/2 - 40, 50, RED);
             DrawRectangleRec(gameOverRestartBtn, CheckCollisionPointRec(GetMousePosition(), gameOverRestartBtn) ? DARKGREEN : GREEN);
