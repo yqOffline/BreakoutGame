@@ -1,252 +1,232 @@
 #include "game.h"
-#include <iostream>
+#include <random>
 
-// ======================== 构造函数 ========================
-Game::Game(int screenWidth, int screenHeight)
-    : ball({ 0,0 }, { 0,0 }, 0),
-      paddle(0,0,0,0),
-      score(0),
-      hearts(3),
-      brickRowColors({ RED, ORANGE, YELLOW, GREEN, BLUE }),
-      currentState(GameState::MENU)  // 初始状态：菜单
-{
-    // 加载配置
-    std::ifstream f("config.json");
-    f >> config;
-    f.close();
+Game::Game() : score(0), lives(3), state(GameState::MENU), pauseCause(PauseCause::MANUAL_PAUSE),
+               currentLevel(1), unlockedLevel(1), totalBricks(0), isTextureLoaded(false) {}
 
-    // 读取配置
-    int sw = config["screen"]["width"];
-    int sh = config["screen"]["height"];
-    int ballX = config["ball"]["init_x"];
-    int ballY = config["ball"]["init_y"];
-    float ballR = config["ball"]["radius"];
-    float speedX = config["ball"]["speed_x"];
-    float speedY = config["ball"]["speed_y"];
-
-    float padW = config["paddle"]["width"];
-    float padH = config["paddle"]["height"];
-    float padY = config["paddle"]["y_pos"];
-    paddleMoveSpeed = config["paddle"]["speed"];
-
-    // 初始化对象
-    ball = Ball({ (float)ballX, (float)ballY }, { 0,0 }, ballR);
-    paddle = Paddle((sw - padW) / 2, padY, padW, padH);
-
-    // 砖块配置
-    brickRows = config["bricks"]["rows"];
-    brickCols = config["bricks"]["cols"];
-    brickWidth = config["bricks"]["width"];
-    brickHeight = config["bricks"]["height"];
-    brickSpacing = config["bricks"]["spacing"];
-    brickStartY = config["bricks"]["start_y"];
-    hearts = config["game"]["initial_hearts"];
-
-    // UI 按钮
-    redLine = {
-        0.0f, paddle.GetRectangle().y + paddle.GetRectangle().height + 5.0f,
-        (float)sw, 3.0f
-    };
-    startBtn = { (float)sw / 2 - 60, (float)sh / 2 - 25, 120, 50 };
-    continueBtn = { (float)sw / 2 - 100, (float)sh / 2 - 25, 100, 50 };
-    restartBtn = { (float)sw / 2 + 20, (float)sh / 2 - 25, 100, 50 };
-    gameOverRestartBtn = { (float)sw / 2 - 60, (float)sh / 2 + 40, 120, 50 };
-
-    // 加载纹理
-    backgroundTex = LoadTexture("1.png");
-    paddleTex = LoadTexture("2.png");
-    bgLoaded = (backgroundTex.id != 0);
-    paddleLoaded = (paddleTex.id != 0);
-
-    //初始化暂停原因
-    this->pauseCause = PauseCause::MANUAL_PAUSE;
-
-    ResetBricks();
-}
-
-// ======================== 析构函数 ========================
 Game::~Game() {
-    UnloadTexture(backgroundTex);
-    UnloadTexture(paddleTex);
+    if (isTextureLoaded) UnloadTexture(backgroundTex);
 }
 
-// ======================== 重置游戏（状态机专用） ========================
-void Game::ResetGame() {
-    int bx = config["ball"]["init_x"];
-    int by = config["ball"]["init_y"];
-    ball.SetPosition({ (float)bx, (float)by });
-    ball.SetSpeed({ 0,0 });
+void Game::Init(const json& config) {
+    screenWidth = config["screen"]["width"];
+    screenHeight = config["screen"]["height"];
+    bottomLineY = screenHeight - 50;
+
+    for (int i = 0; i < 3; i++) {
+        levelConfigs[i] = config["levels"][i];
+    }
+
+    backgroundTex = LoadTexture("resources/background.png");
+    isTextureLoaded = true;
+
+    LoadLevel(1);
+}
+
+void Game::LoadLevel(int level) {
+    currentLevel = level;
+    json cfg = levelConfigs[level - 1];
+
     score = 0;
-    hearts = config["game"]["initial_hearts"];
-    currentState = GameState::MENU;  // 回到菜单
-    ResetBricks();
+    lives = cfg["game"]["lives"];
+    // 修复JSON报错：显式转换为int
+    int rows = cfg["bricks"]["rows"].get<int>();
+    int cols = cfg["bricks"]["cols"].get<int>();
+    totalBricks = rows * cols;
+
+    // 初始化小球/挡板
+    ball.Init(cfg["ball"]);
+    paddle.Init(cfg["paddle"]);
+    bricks.clear();
+
+    float w = cfg["bricks"]["width"].get<float>();
+    float h = cfg["bricks"]["height"].get<float>();
+    float spacing = cfg["bricks"]["spacing"].get<float>();
+    float startX = (screenWidth - (cols * (w + spacing))) / 2;
+    float startY = cfg["bricks"]["startY"].get<float>();
+    Color colors[5] = {RED, ORANGE, YELLOW, GREEN, BLUE};
+
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            float x = startX + j * (w + spacing);
+            float y = startY + i * (h + spacing);
+            bricks.emplace_back(x, y, w, h, colors[i % 5]);
+        }
+    }
+    state = GameState::PLAYING;
 }
 
-// ======================== 重置砖块 ========================
-void Game::ResetBricks() {
-    bricks.clear();
-    float totalW = brickCols * brickWidth + (brickCols - 1) * brickSpacing;
-    float startX = (GetScreenWidth() - totalW) / 2.0f;
+void Game::ResetCurrentLevel() {
+    LoadLevel(currentLevel);
+}
 
-    for (int r = 0; r < brickRows; r++) {
-        Color c = brickRowColors[r % brickRowColors.size()];
-        for (int col = 0; col < brickCols; col++) {
-            float x = startX + col * (brickWidth + brickSpacing);
-            float y = brickStartY + r * (brickHeight + brickSpacing);
-            bricks.emplace_back(x, y, brickWidth, brickHeight, c);
+void Game::ResetGame() {
+    unlockedLevel = 1;
+    LoadLevel(1);
+}
+
+void Game::CheckLevelComplete() {
+    if (state != GameState::PLAYING) return;
+    int activeBricks = 0;
+    for (auto& brick : bricks) if (brick.IsActive()) activeBricks++;
+    if (activeBricks == 0) {
+        if (currentLevel < 3 && currentLevel == unlockedLevel) {
+            unlockedLevel = currentLevel + 1;
         }
+        if (currentLevel == 3)
+            state = GameState::GAME_VICTORY;
+        else
+            state = GameState::LEVEL_VICTORY;
     }
 }
 
-// ======================== 球碰红线扣血 ========================
-void Game::CheckBallHitRedLine() {
-    if (CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), redLine)) {
-        hearts--;
-        ball.SetSpeed({ 0,0 });
+void Game::HandleInput() {
+    Vector2 mouse = GetMousePosition();
 
-        if (hearts <= 0) {
-            currentState = GameState::GAME_OVER;  // 状态切换：游戏结束
-        } else {
-            currentState = GameState::PAUSED;     // 状态切换：暂停
+    if (state == GameState::MENU) {
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 250, 200, 50})) {
+            state = GameState::LEVEL_SELECT;
+        }
+    }
+    else if (state == GameState::LEVEL_SELECT) {
+        if (unlockedLevel >= 1 && CheckCollisionPointRec(mouse, {200, 200, 150, 80}) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+            LoadLevel(1);
+        if (unlockedLevel >= 2 && CheckCollisionPointRec(mouse, {325, 200, 150, 80}) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+            LoadLevel(2);
+        if (unlockedLevel >= 3 && CheckCollisionPointRec(mouse, {450, 200, 150, 80}) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+            LoadLevel(3);
+        if (CheckCollisionPointRec(mouse, {300, 300, 200, 50}) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+            state = GameState::MENU;
+    }
+    else if (state == GameState::PLAYING) {
+        paddle.Move();
+        if (IsKeyPressed(KEY_SPACE)) {
+            state = GameState::PAUSED;
+            pauseCause = PauseCause::MANUAL_PAUSE;
+        }
+        if (ball.GetPosition().y + ball.GetRadius() > bottomLineY) {
+            lives--;
+            state = GameState::PAUSED;
             pauseCause = PauseCause::LIFE_LOSS_PAUSE;
         }
+        if (lives <= 0) state = GameState::GAME_OVER;
+    }
+    else if (state == GameState::PAUSED) {
+        if (IsKeyPressed(KEY_SPACE)) {
+            state = GameState::PLAYING;
+            if (pauseCause == PauseCause::LIFE_LOSS_PAUSE) ball.Reset();
+        }
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 250, 200, 50})) {
+            state = GameState::PLAYING;
+            if (pauseCause == PauseCause::LIFE_LOSS_PAUSE) ball.Reset();
+        }
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 320, 200, 50})) {
+            ResetCurrentLevel();
+        }
+    }
+    else if (state == GameState::GAME_OVER) {
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 250, 200, 50})) {
+            ResetCurrentLevel();
+        }
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 320, 200, 50})) {
+            state = GameState::LEVEL_SELECT;
+        }
+    }
+    else if (state == GameState::LEVEL_VICTORY) {
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 250, 200, 50})) {
+            LoadLevel(currentLevel + 1);
+        }
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 320, 200, 50})) {
+            state = GameState::LEVEL_SELECT;
+        }
+    }
+    else if (state == GameState::GAME_VICTORY) {
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mouse, {300, 250, 200, 50})) {
+            ResetGame();
+            state = GameState::LEVEL_SELECT;
+        }
     }
 }
 
-// ======================== 胜利检测 ========================
-void Game::CheckGameVictory() {
-    if (score >= brickRows * brickCols) {
-        currentState = GameState::GAME_OVER;
-        ball.SetSpeed({ 0,0 });
+void Game::Update() {
+    if (state == GameState::PLAYING) {
+        ball.Update();
+        ball.CheckCollisionPaddle(paddle);
+        for (auto& brick : bricks) {
+            if (brick.IsActive() && ball.CheckCollisionBrick(brick)) {
+                score += 10;
+                break;
+            }
+        }
+        CheckLevelComplete();
     }
 }
 
-// ======================== 【状态机】输入处理 ========================
-void Game::HandleInput(Vector2 mousePos) {
-    switch (currentState) {
-        case GameState::MENU:
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)||IsKeyPressed(KEY_SPACE)) {
-                currentState = GameState::PLAYING;
-                ball.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
-            }
-            break;
-
-        case GameState::PLAYING:
-            // space 键 → 暂停
-            if (IsKeyPressed(KEY_SPACE)) {
-                currentState = GameState::PAUSED;
-                pauseCause = PauseCause::MANUAL_PAUSE;
-            }
-            break;
-
-        case GameState::PAUSED:
-            // space → 继续游戏
-            if (IsKeyPressed(KEY_SPACE)||IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn)) {
-                currentState = GameState::PLAYING;
-            }
-            // 点击继续
-            
-            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn) || IsKeyPressed(KEY_SPACE)) && pauseCause == PauseCause::LIFE_LOSS_PAUSE) {
-            // 把球放到挡板正上方（远离红线，避免二次碰撞）
-                float paddleCenterX = paddle.GetRectangle().x + paddle.GetRectangle().width / 2;
-                float paddleTopY = paddle.GetRectangle().y - ball.GetRadius() - 2;
-                ball.SetPosition({ paddleCenterX, paddleTopY });
-                // 设置球初始速度
-                ball.SetSpeed({ 2, -5 });
-                // 恢复游戏
-                currentState = GameState::PLAYING;
-            }
-            // 点击重启
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)|| IsKeyPressed(KEY_R)) {
-                ResetGame();
-            }
-            break;
-
-        case GameState::GAME_OVER:
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, gameOverRestartBtn)|| IsKeyPressed(KEY_SPACE)) {
-                ResetGame();
-            }
-            break;
-    }
-}
-
-// ======================== 【状态机】逻辑更新 ========================
-void Game::Update(float dt) {
-    // 只有 PLAYING 状态才更新游戏逻辑
-    if (currentState != GameState::PLAYING) return;
-
-    ball.Move();
-    ball.BounceEdge(GetScreenWidth(), GetScreenHeight());
-    ball.CheckCollisionPaddle(paddle);
-    ball.CheckCollisionBricks(bricks, score);
-
-    // 挡板移动
-    if (IsKeyDown(KEY_LEFT)) paddle.MoveLeft(paddleMoveSpeed);
-    if (IsKeyDown(KEY_RIGHT)) paddle.MoveRight(paddleMoveSpeed);
-
-    CheckBallHitRedLine();
-    CheckGameVictory();
-}
-
-// ======================== 【状态机】绘制 ========================
 void Game::Draw() {
-    // 背景
-    if (bgLoaded) {
-        DrawTexturePro(backgroundTex,
-            { 0,0,(float)backgroundTex.width,(float)backgroundTex.height },
-            { 0,0,(float)GetScreenWidth(),(float)GetScreenHeight() },
-            { 0,0 }, 0, WHITE);
-    } else {
-        ClearBackground(RAYWHITE);
+    DrawTexture(backgroundTex, 0, 0, WHITE);
+    if (state == GameState::MENU) {
+        DrawText("BRICK BREAKER", 250, 100, 50, WHITE);
+        DrawRectangle(300, 250, 200, 50, BLUE);
+        DrawText("START GAME", 320, 260, 30, WHITE);
     }
-
-    // 墙体
-    DrawRectangle(0, 0, 5, GetScreenHeight(), GRAY);
-    DrawRectangle(GetScreenWidth() - 5, 0, 5, GetScreenHeight(), GRAY);
-    DrawRectangle(0, 0, GetScreenWidth(), 5, GRAY);
-    DrawRectangle(0, GetScreenHeight() - 5, GetScreenWidth(), 5, GRAY);
-
-    // 游戏对象
-    ball.Draw();
-    paddleLoaded ? DrawTexturePro(paddleTex, { 0,0,(float)paddleTex.width,(float)paddleTex.height },
-        paddle.GetRectangle(), { 0,0 }, 0, WHITE) : paddle.Draw();
-    for (auto& b : bricks) b.Draw();
-
-    // 红线
-    if (currentState == GameState::PLAYING) DrawRectangleRec(redLine, RED);
-
-    // UI 文字
-    DrawText(TextFormat("SCORE: %d", score), 10, 10, 20, BLUE);
-    DrawText(TextFormat("LIVES: %d", hearts), 10, 40, 20, RED);
-
-    // ======================== 按状态绘制UI ========================
-    switch (currentState) {
-        case GameState::MENU:
-            DrawRectangleRec(startBtn, CheckCollisionPointRec(GetMousePosition(), startBtn) ? DARKGREEN : GREEN);
-            DrawText("START GAME", startBtn.x + 12, startBtn.y + 15, 20, BLACK);
-            break;
-
-        case GameState::PAUSED:
-            DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.7f));
-            DrawRectangleRec(continueBtn, CheckCollisionPointRec(GetMousePosition(), continueBtn) ? DARKBLUE : BLUE);
-            DrawText("CONTINUE", continueBtn.x + 15, continueBtn.y + 15, 20, BLACK);
-            DrawRectangleRec(restartBtn, CheckCollisionPointRec(GetMousePosition(), restartBtn) ? MAROON : RED);
-            DrawText("RESTART", restartBtn.x + 20, restartBtn.y + 15, 20, BLACK);
-            DrawText("PAUSED", GetScreenWidth()/2 - 60, GetScreenHeight()/2 - 80, 40, WHITE);
-            break;
-
-        case GameState::GAME_OVER:
-            DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.8f));
-            DrawText("GAME OVER", GetScreenWidth()/2 - 100, GetScreenHeight()/2 - 40, 50, RED);
-            DrawRectangleRec(gameOverRestartBtn, CheckCollisionPointRec(GetMousePosition(), gameOverRestartBtn) ? DARKGREEN : GREEN);
-            DrawText("PLAY AGAIN", gameOverRestartBtn.x + 10, gameOverRestartBtn.y + 15, 20, BLACK);
-            break;
-
-        default: break;
+    else if (state == GameState::LEVEL_SELECT) DrawLevelSelect();
+    else {
+        paddle.Draw();
+        ball.Draw();
+        for (auto& brick : bricks) brick.Draw();
+        DrawUI();
+        if (state == GameState::PAUSED) DrawPauseMenu();
+        if (state == GameState::GAME_OVER) DrawGameOver();
+        if (state == GameState::LEVEL_VICTORY) DrawLevelVictory();
+        if (state == GameState::GAME_VICTORY) DrawAllVictory();
     }
 }
 
-// ======================== 游戏运行判断 ========================
-bool Game::IsGameRunning() const {
-    return !WindowShouldClose();
+void Game::DrawLevelSelect() {
+    DrawText("SELECT LEVEL", 250, 100, 50, WHITE);
+    DrawRectangle(200, 200, 150, 80, unlockedLevel>=1 ? GREEN : GRAY);
+    DrawText("LEVEL 1", 220, 220, 25, WHITE);
+    DrawRectangle(325, 200, 150, 80, unlockedLevel>=2 ? GREEN : GRAY);
+    DrawText("LEVEL 2", 345, 220, 25, WHITE);
+    DrawRectangle(450, 200, 150, 80, unlockedLevel>=3 ? GREEN : GRAY);
+    DrawText("LEVEL 3", 470, 220, 25, WHITE);
+    DrawRectangle(300, 300, 200, 50, BLUE);
+    DrawText("BACK MENU", 320, 310, 30, WHITE);
+}
+
+void Game::DrawLevelVictory() {
+    DrawText("LEVEL CLEAR!", 250, 150, 50, GREEN);
+    DrawRectangle(300, 250, 200, 50, BLUE);
+    DrawText("NEXT LEVEL", 320, 260, 25, WHITE);
+    DrawRectangle(300, 320, 200, 50, BLUE);
+    DrawText("LEVEL SELECT", 310, 330, 20, WHITE);
+}
+
+void Game::DrawAllVictory() {
+    DrawText("ALL LEVELS CLEAR!", 180, 150, 50, GOLD);
+    DrawText("CONGRATULATIONS!", 200, 220, 40, WHITE);
+    DrawRectangle(300, 300, 200, 50, BLUE);
+    DrawText("PLAY AGAIN", 320, 310, 30, WHITE);
+}
+
+void Game::DrawPauseMenu() {
+    DrawRectangle(300, 250, 200, 50, BLUE);
+    DrawText("CONTINUE", 330, 260, 30, WHITE);
+    DrawRectangle(300, 320, 200, 50, BLUE);
+    DrawText("RESTART", 330, 330, 30, WHITE);
+}
+
+void Game::DrawGameOver() {
+    DrawText("GAME OVER", 280, 150, 50, RED);
+    DrawRectangle(300, 250, 200, 50, BLUE);
+    DrawText("TRY AGAIN", 330, 260, 30, WHITE);
+    DrawRectangle(300, 320, 200, 50, BLUE);
+    DrawText("LEVEL SELECT", 310, 330, 20, WHITE);
+}
+
+void Game::DrawUI() {
+    DrawText(TextFormat("SCORE: %d", score), 10, 10, 20, WHITE);
+    DrawText(TextFormat("LIVES: %d", lives), 10, 40, 20, WHITE);
+    DrawText(TextFormat("LEVEL: %d", currentLevel), 680, 10, 20, WHITE);
+    DrawLine(0, bottomLineY, screenWidth, bottomLineY, RED);
 }

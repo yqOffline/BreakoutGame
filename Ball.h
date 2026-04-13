@@ -2,28 +2,35 @@
 #define BALL_H
 
 #include "raylib.h"
-#include "Paddle.h"
-#include "Brick.h"
+#include "nlohmann/json.hpp"
 #include <vector>
+#include "Brick.h"
+#include "Paddle.h"
+
+using json = nlohmann::json;
 
 class Ball {
+public:
+    Ball() = default;
+    Ball(Vector2 pos, Vector2 sp, float r);
+
+    void Init(const json& cfg);
+    void Reset();
+    void Move();  // ✅ 新增这一行，修复第一个报错
+    void Update();
+    void Draw();
+    void BounceEdge(int screenWidth, int screenHeight);
+    void CheckCollisionPaddle(Paddle& paddle);
+    bool CheckCollisionBrick(Brick& brick);
+    void CheckCollisionBricks(std::vector<Brick>& bricks, int& score);
+
+    Vector2 GetPosition() const { return position; }
+    float GetRadius() const { return radius; }
+
 private:
     Vector2 position;
     Vector2 speed;
     float radius;
-public:
-    Ball(Vector2 pos, Vector2 sp, float r);
-    void Move();
-    void Draw();
-    void BounceEdge(int screenWidth, int screenHeight);
-    Vector2 GetPosition() const {return position;}
-    Vector2 GetSpeed() const {return speed;}
-    float GetRadius() const {return radius;}
-
-    void CheckCollisionPaddle(Paddle& paddle);
-    void CheckCollisionBricks(std::vector<Brick>& bricks,int& score);
-    void SetSpeed(Vector2 sp){speed = sp;}
-    void SetPosition(Vector2 pos){position = pos;}
 };
 
 #endif
