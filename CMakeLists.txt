@@ -4,7 +4,7 @@ project(breakout_week2)
 find_package(raylib REQUIRED)
 
 add_executable(breakout_week2
-    main.cpp
+    main_2.cpp
     Ball.cpp
     Paddle.cpp
     Brick.cpp

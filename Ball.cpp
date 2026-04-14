@@ -16,17 +16,6 @@ void Ball::Draw() {
     DrawCircleV(position, radius, RED);
 }
 
-// void Ball::BounceEdge(int screenWidth, int screenHeight) {
-//     // 左右边界
-//     if (position.x - radius <= 0 || position.x + radius >= screenWidth) {
-//         speed.x *= -1;
-//     }
-//     // 上边界
-//     if (position.y - radius <= 0) {
-//         speed.y *= -1;
-//     }
-//     // 下边界暂时不处理
-// }
 
 void Ball::BounceEdge(int screenWidth, int screenHeight) {
     // 左右边界

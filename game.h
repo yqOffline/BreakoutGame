@@ -7,16 +7,16 @@
 #include "Brick.h"
 #include <vector>
 #include <fstream>
-#include "json.hpp"
 
-using json = nlohmann::json;
+#include "json.hpp"
+using json = nlohmann::json;  //json.hpp：将c++与json互译的工具
 
 // ======================== 【状态机核心】4种状态 ========================
 enum class GameState {  /*定义强类型枚举,预防枚举重名的情况*/
     MENU,       // 主菜单
     PLAYING,    // 游戏进行
     PAUSED,     // 暂停
-    GAME_OVER,   // 游戏结束
+    GAME_OVER   // 游戏结束
 };
 
 enum class PauseCause{
