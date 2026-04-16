@@ -16,14 +16,16 @@ public:
     void Move();
     void Draw();
     void BounceEdge(int screenWidth, int screenHeight);
-    Vector2 GetPosition() const {return position;}
-    Vector2 GetSpeed() const {return speed;}
-    float GetRadius() const {return radius;}
+
+    Vector2 GetPosition() const { return position; }
+    Vector2 GetSpeed() const { return speed; }
+    float GetRadius() const { return radius; }
+    void SetPosition(Vector2 pos) { position = pos; }
+    void SetSpeed(Vector2 sp) { speed = sp; }
+    void SetRadius(float r) { radius = r; }
 
     void CheckCollisionPaddle(Paddle& paddle);
     void CheckCollisionBricks(std::vector<Brick>& bricks,int& score);
-    void SetSpeed(Vector2 sp){speed = sp;}
-    void SetPosition(Vector2 pos){position = pos;}
 };
 
 #endif

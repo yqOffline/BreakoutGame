@@ -12,6 +12,8 @@ class Paddle {
         void MoveLeft(float speed);
         void MoveRight(float speed);
         Rectangle GetRectangle() const {return rect;};
+        void SetWidth(float w){ rect.width = w; }
+        float GetWidth() const { return rect.width; }
 };
 
 #endif
