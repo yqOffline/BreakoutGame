@@ -59,3 +59,18 @@ void ParticleSystem::Draw() {
         DrawCircleV(p.position, p.size * p.lifetime, drawColor);
     }
 }
+
+void ParticleSystem::EmitExplosion(Vector2 center, Color baseColor, int count) {
+    for (int i = 0; i < count; ++i) {
+        Particle p;
+        p.position = center;
+        float angle = GetRandomValue(0, 360) * DEG2RAD;
+        float speed = GetRandomValue(100, 300);
+        p.velocity = { cosf(angle) * speed, sinf(angle) * speed };
+        p.color = baseColor;
+        p.lifetime = 0.8f;
+        p.size = GetRandomValue(3, 6);
+        p.active = true;
+        particles.push_back(p);
+    }
+}

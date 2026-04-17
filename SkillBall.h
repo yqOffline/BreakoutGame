@@ -7,7 +7,10 @@
 enum class SkillType {
     PADDLE_EXTEND,  // 板变长 (白色)
     BALL_ENLARGE,   // 球变大 (绿色)
-    BALL_SHRINK     // 球变小 (红色)
+    BALL_SHRINK,     // 球变小 (红色)
+    EXPLOSION,      //爆炸球 (橙色)
+    INVINCIBLE,     //无敌球(金色)
+    SPLIT           //分裂球 (青色)
 };
 
 class SkillBall : public Ball {

@@ -27,6 +27,8 @@ public:
     
     // 是否应该掉落技能球（血量>1且随机判定）
     bool ShouldDropSkill(float chance) const;
+
+    void SetRect(Rectangle r) { rect = r; }
 };
 
 #endif

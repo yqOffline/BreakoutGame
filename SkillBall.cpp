@@ -48,6 +48,9 @@ Color SkillBall::GetColor() const {
         case SkillType::PADDLE_EXTEND: return WHITE;
         case SkillType::BALL_ENLARGE:  return GREEN;
         case SkillType::BALL_SHRINK:   return RED;
+        case SkillType::EXPLOSION:     return ORANGE;
+        case SkillType::INVINCIBLE:    return GOLD;
+        case SkillType::SPLIT:         return SKYBLUE;
         default: return GRAY;
     }
 }

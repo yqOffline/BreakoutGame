@@ -7,6 +7,7 @@ class Paddle {
     private:
         Rectangle rect;
     public:
+        Paddle();
         Paddle(float x, float y, float w, float h);
         void Draw();
         void MoveLeft(float speed);

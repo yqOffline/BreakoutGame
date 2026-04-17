@@ -27,6 +27,7 @@ public:
     
     // 清除所有粒子
     void Clear() { particles.clear(); }
+    void EmitExplosion(Vector2 center, Color baseColor, int count);
 };
 
 #endif // PARTICLE_H

@@ -1,18 +1,18 @@
 {
   "screen": { "width": 800, "height": 600 },
   "ball": { "radius": 10, "speed_x": 4, "speed_y": -5, "init_x": 400, "init_y": 300 },
-  "paddle": { "width": 100, "height": 20, "speed": 7, "y_pos": 550 },
-  "game": { "initial_hearts": 3 },
+  "paddle": { "width": 100, "height": 20, "speed": 10, "y_pos": 550 },
+  "game": { "initial_hearts": 10 },
   "levels": [
     { "rows": 5, "cols": 5, "brick_height": 25, "spacing": 10, "start_y": 80, "margin": 40 },
     { "rows": 4, "cols": 6, "brick_height": 25, "spacing": 10, "start_y": 80, "margin": 40 },
     { "rows": 3, "cols": 7, "brick_height": 30, "spacing": 12, "start_y": 90, "margin": 30 }
   ],
   "brick_health_distribution": {
-    "hp3_ratio": 0.3,
-    "hp5_ratio": 0.2,
-    "hp10_ratio": 0.1,
-    "hp20_ratio": 0.05
+    "hp2_ratio": 0.3,
+    "hp3_ratio": 0.2,
+    "hp4_ratio": 0.1,
+    "hp5_ratio": 0.05
   },
   "skill_ball": {
     "drop_chance": 0.3,

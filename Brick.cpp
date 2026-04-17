@@ -27,10 +27,10 @@ Color Brick::GetColor() const {
     // 根据血量比例变暗
     float ratio = (float)health / maxHealth;
     switch (maxHealth) {
-        case 3:  return Color{ 255, (unsigned char)(165 * ratio), 0, 255 }; // 橙黄
-        case 5:  return Color{ 100, 149, 237, 255 }; // 矢车菊蓝
-        case 10: return Color{ 186, 85, 211, 255 };  // 紫罗兰
-        case 20: return Color{ 255, 215, 0, 255 };   // 金色
+        case 2:  return Color{ 255, (unsigned char)(165 * ratio), 0, 255 }; // 橙黄
+        case 3:  return Color{ 100, 149, 237, 255 }; // 矢车菊蓝
+        case 4: return Color{ 186, 85, 211, 255 };  // 紫罗兰
+        case 5: return Color{ 255, 215, 0, 255 };   // 金色
         default: return Color{ 200, 200, 200, 255 }; // 浅灰
     }
 }

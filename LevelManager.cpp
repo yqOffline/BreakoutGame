@@ -95,21 +95,21 @@ void LevelManager::LoadLevel(int levelIndex, std::vector<Brick>& outBricks,
 }
 
 std::vector<int> LevelManager::GenerateHealthPool(int totalBricks, const json& healthDist) {
-    int count3  = static_cast<int>(totalBricks * healthDist.value("hp3_ratio", 0.3));
-    int count5  = static_cast<int>(totalBricks * healthDist.value("hp5_ratio", 0.2));
-    int count10 = static_cast<int>(totalBricks * healthDist.value("hp10_ratio", 0.1));
-    int count20 = static_cast<int>(totalBricks * healthDist.value("hp20_ratio", 0.05));
+    int count2  = static_cast<int>(totalBricks * healthDist.value("hp2_ratio", 0.3));
+    int count3  = static_cast<int>(totalBricks * healthDist.value("hp3_ratio", 0.2));
+    int count4 = static_cast<int>(totalBricks * healthDist.value("hp4_ratio", 0.1));
+    int count5 = static_cast<int>(totalBricks * healthDist.value("hp5_ratio", 0.05));
     
     // 向下取整可能导致总和不足，剩余用hp1补足
-    int count1 = totalBricks - count3 - count5 - count10 - count20;
+    int count1 = totalBricks - count2 - count3 - count4 - count5;
     if (count1 < 0) count1 = 0; // 防御性处理
     
     std::vector<int> pool;
     pool.insert(pool.end(), count1, 1);
+    pool.insert(pool.end(), count2, 2);
     pool.insert(pool.end(), count3, 3);
+    pool.insert(pool.end(), count4, 4);
     pool.insert(pool.end(), count5, 5);
-    pool.insert(pool.end(), count10, 10);
-    pool.insert(pool.end(), count20, 20);
     
     // 如果因为取整导致总数量超过totalBricks，截断；若不足，补1（但理论上不会）
     if ((int)pool.size() > totalBricks)

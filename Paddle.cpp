@@ -1,5 +1,7 @@
 #include "Paddle.h"
 
+Paddle::Paddle():rect{0,0,0,0}{}
+
 Paddle::Paddle(float x, float y, float w, float h) {
     rect = { x, y, w, h };
 }
