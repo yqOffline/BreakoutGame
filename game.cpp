@@ -1,8 +1,9 @@
 #include "game.h"
+#include "EffectFactory.h"
 #include <fstream>
 #include <iostream>
-#include <cmath>          // 用于 sqrtf
-#include <algorithm>      // 用于 std::remove_if
+#include <cmath>
+#include <algorithm>
 
 // ======================== 构造函数 ========================
 Game::Game(int screenWidth, int screenHeight)
@@ -18,16 +19,19 @@ Game::Game(int screenWidth, int screenHeight)
     f >> config;
     f.close();
 
-    // 2. 用配置值重新设置 balls（多球支持）
+    // 2. 加载效果工厂配置
+    EffectFactory::LoadConfig(config);
+
+    // 3. 用配置值设置 balls
     float bx = config["ball"]["init_x"];
     float by = config["ball"]["init_y"];
     float br = config["ball"]["radius"];
     float spx = config["ball"]["speed_x"];
     float spy = config["ball"]["speed_y"];
     balls.emplace_back(Vector2{bx, by}, Vector2{spx, spy}, br);
-    ballTrails.emplace_back();  // 对应第一个球的拖尾队列
+    ballTrails.emplace_back();
 
-    // 3. 用配置值重新设置 paddle
+    // 4. 设置 paddle
     float pw = config["paddle"]["width"];
     float ph = config["paddle"]["height"];
     float px = (screenWidth - pw) / 2.0f;
@@ -35,17 +39,13 @@ Game::Game(int screenWidth, int screenHeight)
     paddle = Paddle(px, py, pw, ph);
     paddleMoveSpeed = config["paddle"]["speed"];
 
-    // 4. 初始化 LevelManager（延迟加载配置）
+    // 5. 初始化 LevelManager
     levelManager.LoadConfig(config);
 
-    // 5. 读取其他配置项
+    // 6. 读取配置项
     skillDropChance = config["skill_ball"].value("drop_chance", 0.3f);
     skillBallSpeedY = config["skill_ball"].value("speed_y", 45.0f);
     skillBallRadius = config["skill_ball"].value("radius", 6.0f);
-    buffDuration = config["skill_ball"].value("buff_duration", 5.0f);
-    paddleExtendFactor = config["skill_ball"].value("paddle_extend_factor", 1.5f);
-    ballEnlargeFactor = config["skill_ball"].value("ball_enlarge_factor", 1.5f);
-    ballShrinkFactor = config["skill_ball"].value("ball_shrink_factor", 0.7f);
     
     particlesPerBrick = config["particles"].value("count_per_brick", 12);
     particleGravity = config["particles"].value("gravity", 300.0f);
@@ -54,14 +54,13 @@ Game::Game(int screenWidth, int screenHeight)
     
     totalLevels = levelManager.GetLevelCount();
     
-    // 记录原始尺寸用于Buff恢复
     originalPaddleWidth = paddle.GetWidth();
-    originalBallRadius = balls[0].GetRadius();  // 多球系统：以第一个球半径为准（所有球半径应一致）
+    originalBallRadius = balls[0].GetRadius();
 
-    // 6. 加载第一关
+    // 7. 加载第一关
     LoadLevel(0);
 
-    // 7. UI 按钮初始化
+    // 8. UI 按钮初始化
     redLine = {
         0.0f, paddle.GetRectangle().y + paddle.GetRectangle().height + 5.0f,
         (float)screenWidth, 3.0f
@@ -73,16 +72,13 @@ Game::Game(int screenWidth, int screenHeight)
     replayBtn = { (float)screenWidth / 2 - 160, (float)screenHeight / 2 + 20, 120, 50 };
     goAheadBtn = { (float)screenWidth / 2 + 40, (float)screenHeight / 2 + 20, 120, 50 };
 
-    // 8. 加载纹理
+    // 9. 加载纹理
     backgroundTex = LoadTexture("1.png");
     paddleTex = LoadTexture("2.png");
     bgLoaded = (backgroundTex.id != 0);
     paddleLoaded = (paddleTex.id != 0);
 
-    // 9. 初始化暂停原因
     pauseCause = PauseCause::MANUAL_PAUSE;
-
-    // 10. 最后一块砖动画相关变量初始化
     lastBrickAnimating = false;
     lastBrickIndex = -1;
     lastBrickAnimTimer = 0.0f;
@@ -94,7 +90,7 @@ Game::~Game() {
     UnloadTexture(paddleTex);
 }
 
-// ======================== 重置游戏（状态机专用） ========================
+// ======================== 重置游戏 ========================
 void Game::ResetGame() {
     int bx = config["ball"]["init_x"];
     int by = config["ball"]["init_y"];
@@ -106,6 +102,7 @@ void Game::ResetGame() {
     hearts = config["game"]["initial_hearts"];
     currentState = GameState::MENU;
     ResetBricks();
+    activeEffect.reset();
 }
 
 // ======================== 重置砖块 ========================
@@ -121,14 +118,13 @@ void Game::CheckBallHitRedLine() {
         Ball& ball = balls[i];
         if (CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), redLine)) {
             // 无敌效果：反弹
-            if (activeBuffType == SkillType::INVINCIBLE && buffActive) {
+            if (HasEffectOfType("Invincible")) {
                 Vector2 sp = ball.GetSpeed();
                 sp.y *= -1;
                 ball.SetSpeed(sp);
                 ball.SetPosition({ ball.GetPosition().x, redLine.y - ball.GetRadius() });
                 continue;
             }
-            // 普通情况：标记移除
             ballsToRemove.push_back(i);
             particleSystem.EmitExplosion(ball.GetPosition(), RED, 15);
         }
@@ -136,13 +132,11 @@ void Game::CheckBallHitRedLine() {
 
     if (ballsToRemove.empty()) return;
 
-    // 从后往前删除
     for (auto it = ballsToRemove.rbegin(); it != ballsToRemove.rend(); ++it) {
         balls.erase(balls.begin() + *it);
         ballTrails.erase(ballTrails.begin() + *it);
     }
 
-    // 所有球都消失，扣血并暂停/结束
     if (balls.empty()) {
         hearts--;
         if (hearts <= 0) {
@@ -150,7 +144,6 @@ void Game::CheckBallHitRedLine() {
         } else {
             currentState = GameState::PAUSED;
             pauseCause = PauseCause::LIFE_LOSS_PAUSE;
-            // 生成新球准备下一回合
             float paddleCenterX = paddle.GetRectangle().x + paddle.GetRectangle().width / 2;
             float paddleTopY = paddle.GetRectangle().y - originalBallRadius - 2;
             balls.emplace_back(Vector2{paddleCenterX, paddleTopY},
@@ -159,6 +152,33 @@ void Game::CheckBallHitRedLine() {
             ballTrails.emplace_back();
         }
     }
+}
+
+// ======================== 应用效果 ========================
+void Game::ApplyEffect(std::unique_ptr<Effect> effect) {
+    // 如果已有激活效果且新效果不是瞬时效果（SPLIT），先撤销旧效果
+    if (activeEffect && effect->GetName() != "Split") {
+        activeEffect->Revert(this);
+    }
+    activeEffect = std::move(effect);
+    if (activeEffect) {
+        activeEffect->Apply(this);
+    }
+}
+
+// ======================== 更新效果计时 ========================
+void Game::UpdateEffects(float dt) {
+    if (!activeEffect) return;
+    bool stillActive = activeEffect->Update(dt);
+    if (!stillActive) {
+        activeEffect->Revert(this);
+        activeEffect.reset();
+    }
+}
+
+// ======================== 检查是否有特定效果 ========================
+bool Game::HasEffectOfType(const std::string& typeName) const {
+    return activeEffect && activeEffect->GetName() == typeName;
 }
 
 // ======================== 【状态机】输入处理 ========================
@@ -183,7 +203,6 @@ void Game::HandleInput(Vector2 mousePos) {
                 currentState = GameState::PLAYING;
             }
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn) || IsKeyPressed(KEY_SPACE)) && pauseCause == PauseCause::LIFE_LOSS_PAUSE) {
-                // 生命损失后的继续，球已在 CheckBallHitRedLine 中重新生成，只需恢复速度
                 for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
                 currentState = GameState::PLAYING;
             }
@@ -227,7 +246,6 @@ void Game::HandleBallCollisions() {
             float dy = posA.y - posB.y;
             float dist = sqrtf(dx*dx + dy*dy);
             if (dist < radiusSum && dist > 0.001f) {
-                // 弹性碰撞（质量相同）
                 Vector2 spA = a.GetSpeed();
                 Vector2 spB = b.GetSpeed();
                 Vector2 normal = { dx / dist, dy / dist };
@@ -242,7 +260,6 @@ void Game::HandleBallCollisions() {
                 Vector2 newSpB = { normal.x * v2nAfter + tangent.x * v2t, normal.y * v2nAfter + tangent.y * v2t };
                 a.SetSpeed(newSpA);
                 b.SetSpeed(newSpB);
-                // 分离避免卡住
                 float overlap = radiusSum - dist;
                 Vector2 separation = { normal.x * overlap * 0.5f, normal.y * overlap * 0.5f };
                 a.SetPosition({ posA.x + separation.x, posA.y + separation.y });
@@ -274,12 +291,10 @@ void Game::Update(float dt) {
         for (auto& brick : bricks) {
             if (brick.IsActive() && CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), brick.GetRectangle())) {
                 int damage = 1;
-                if (activeBuffType == SkillType::EXPLOSION && buffActive) {
+                if (HasEffectOfType("Explosion")) {
                     damage = 2;
-                    // 爆炸效果：对相邻砖块造成1点伤害（简化处理，仅对上下左右相邻且存在的砖块）
-                    // 实际实现需要找到相邻砖块，此处省略具体索引查找，仅作示意
+                    // TODO: 范围伤害可在此扩展
                 }
-                // 执行伤害
                 bool destroyed = false;
                 for (int d = 0; d < damage; ++d) {
                     if (brick.TakeDamage()) {
@@ -293,15 +308,24 @@ void Game::Update(float dt) {
                     if (brick.ShouldDropSkill(skillDropChance)) {
                         Vector2 spawnPos = { brick.GetRectangle().x + brick.GetRectangle().width / 2,
                                              brick.GetRectangle().y + brick.GetRectangle().height / 2 };
-                        SkillType type = static_cast<SkillType>(GetRandomValue(0, 5)); // 0-5 共6种
-                        skillBalls.emplace_back(spawnPos, type, skillBallRadius, Vector2{0, skillBallSpeedY});
+                        SkillType type = static_cast<SkillType>(GetRandomValue(0, 5));
+                        // 从配置获取光晕颜色（可以预先定义，这里简单映射）
+                        Color glowColor = WHITE;
+                        switch (type) {
+                            case SkillType::PADDLE_EXTEND: glowColor = BLUE; break;
+                            case SkillType::BALL_ENLARGE:  glowColor = GREEN; break;
+                            case SkillType::BALL_SHRINK:   glowColor = RED; break;
+                            case SkillType::EXPLOSION:     glowColor = ORANGE; break;
+                            case SkillType::INVINCIBLE:    glowColor = GOLD; break;
+                            case SkillType::SPLIT:         glowColor = SKYBLUE; break;
+                            default: break;
+                        }
+                        skillBalls.emplace_back(spawnPos, type, skillBallRadius, Vector2{0, skillBallSpeedY}, glowColor);
                     }
                 }
-                // 反弹
                 Vector2 sp = ball.GetSpeed();
                 sp.y *= -1;
                 ball.SetSpeed(sp);
-                // 位置修正
                 if (sp.y > 0)
                     ball.SetPosition({ ball.GetPosition().x, brick.GetRectangle().y + brick.GetRectangle().height + ball.GetRadius() });
                 else
@@ -318,7 +342,11 @@ void Game::Update(float dt) {
     for (auto& sb : skillBalls) {
         sb.Update(dt);
         if (sb.active && CheckCollisionCircleRec(sb.GetPosition(), sb.GetRadius(), paddle.GetRectangle())) {
-            ApplySkillEffect(sb.skillType);
+            // 使用工厂创建效果并应用
+            auto effect = EffectFactory::CreateEffect(sb.skillType);
+            if (effect) {
+                ApplyEffect(std::move(effect));
+            }
             sb.active = false;
         }
     }
@@ -328,14 +356,14 @@ void Game::Update(float dt) {
     // 6. 粒子更新
     particleSystem.Update(dt, particleGravity);
 
-    // 7. Buff更新
-    UpdateBuffs(dt);
+    // 7. 效果更新
+    UpdateEffects(dt);
 
     // 8. 挡板移动
     if (IsKeyDown(KEY_LEFT)) paddle.MoveLeft(paddleMoveSpeed);
     if (IsKeyDown(KEY_RIGHT)) paddle.MoveRight(paddleMoveSpeed);
 
-    // 9. 最后一块砖特殊动画
+    // 9. 最后一块砖特殊动画（保持原有逻辑）
     int activeCount = 0;
     int lastActiveIdx = -1;
     for (int i = 0; i < (int)bricks.size(); ++i) {
@@ -365,7 +393,7 @@ void Game::Update(float dt) {
         }
         Brick& b = bricks[lastBrickIndex];
         float newW = lastBrickStartRect.width + (lastBrickTargetRect.width - lastBrickStartRect.width) * t;
-        float newH = lastBrickStartRect.height; // 高度不变
+        float newH = lastBrickStartRect.height;
         float newX = lastBrickStartRect.x + (lastBrickTargetRect.x - lastBrickStartRect.x) * t;
         float newY = lastBrickStartRect.y + (lastBrickTargetRect.y - lastBrickStartRect.y) * t;
         b.SetRect({ newX, newY, newW, newH });
@@ -432,22 +460,11 @@ void Game::Draw() {
     // 10. UI文字
     DrawText(TextFormat("SCORE: %d", score), 10, 10, 20, BLUE);
     DrawText(TextFormat("LIVES: %d", hearts), 10, 40, 20, RED);
-    // 显示当前关卡
     DrawText(TextFormat("LEVEL: %d", currentLevel + 1), 10, 70, 20, DARKGREEN);
 
-    // 显示激活的 Buff 信息
-    if (buffActive) {
-        const char* effectName = "";
-        Color effectColor = WHITE;
-        switch (activeBuffType) {
-            case SkillType::PADDLE_EXTEND: effectName = "Paddle Extend"; effectColor = BLUE; break;
-            case SkillType::BALL_ENLARGE:  effectName = "Ball Enlarge"; effectColor = GREEN; break;
-            case SkillType::BALL_SHRINK:   effectName = "Ball Shrink"; effectColor = RED; break;
-            case SkillType::EXPLOSION:     effectName = "Explosion"; effectColor = ORANGE; break;
-            case SkillType::INVINCIBLE:    effectName = "Invincible"; effectColor = GOLD; break;
-            default: break;
-        }
-        DrawText(TextFormat("%s: %.1fs", effectName, buffTimer), 10, 100, 20, effectColor);
+    // 显示激活的效果信息
+    if (activeEffect) {
+        DrawText(TextFormat("%s: %.1fs", activeEffect->GetName().c_str(), activeEffect->GetRemainingTime()), 10, 100, 20, GREEN);
     }
 
     // 11. 按状态绘制UI
@@ -490,14 +507,12 @@ void Game::LoadLevel(int index) {
     }
     currentLevel = index;
 
-    // 每关开始时重置心数
-    hearts = config["game"].value("initial_hearts", 10);
+    hearts = config["game"].value("initial_hearts", 3);
 
     float brickWidth, startX;
     levelManager.LoadLevel(index, bricks, brickWidth, startX,
                            GetScreenWidth(), GetScreenHeight());
 
-    // 重置多球
     balls.clear();
     ballTrails.clear();
     Vector2 initPos = { (float)config["ball"]["init_x"], (float)config["ball"]["init_y"] };
@@ -509,84 +524,16 @@ void Game::LoadLevel(int index) {
     skillBalls.clear();
     particleSystem.Clear();
 
-    // 重置最后一块砖动画
     lastBrickAnimating = false;
     lastBrickIndex = -1;
     lastBrickAnimTimer = 0.0f;
 
-    if (buffActive) {
-        paddle.SetWidth(originalPaddleWidth);
-        buffActive = false;
-        buffTimer = 0.0f;
+    // 清除激活效果
+    if (activeEffect) {
+        activeEffect->Revert(this);
+        activeEffect.reset();
     }
-    // 确保挡板宽度恢复
     paddle.SetWidth(originalPaddleWidth);
-}
-
-// ======================== 应用技能效果 ========================
-void Game::ApplySkillEffect(SkillType type) {
-    if (buffActive && type != SkillType::SPLIT) {
-        paddle.SetWidth(originalPaddleWidth);
-        // 球的半径恢复：因为多球，需要遍历所有球恢复半径
-        for (auto& b : balls) b.SetRadius(originalBallRadius);
-        buffActive = false;
-        buffTimer = 0.0f;
-    }
-
-    switch (type) {
-        case SkillType::PADDLE_EXTEND:
-            paddle.SetWidth(originalPaddleWidth * paddleExtendFactor);
-            buffActive = true;
-            activeBuffType = type;
-            buffTimer = buffDuration;
-            break;
-        case SkillType::BALL_ENLARGE:
-            for (auto& b : balls) b.SetRadius(originalBallRadius * ballEnlargeFactor);
-            buffActive = true;
-            activeBuffType = type;
-            buffTimer = buffDuration;
-            break;
-        case SkillType::BALL_SHRINK:
-            for (auto& b : balls) b.SetRadius(originalBallRadius * ballShrinkFactor);
-            buffActive = true;
-            activeBuffType = type;
-            buffTimer = buffDuration;
-            break;
-        case SkillType::EXPLOSION:
-        case SkillType::INVINCIBLE:
-            buffActive = true;
-            activeBuffType = type;
-            buffTimer = buffDuration;
-            break;
-        case SkillType::SPLIT:
-        {
-            std::vector<Ball> newBalls;
-            for (auto& ball : balls) {
-                Vector2 pos = ball.GetPosition();
-                Vector2 sp = ball.GetSpeed();
-                float r = ball.GetRadius();
-                Ball newBall(pos, Vector2{sp.x, -sp.y}, r);
-                newBalls.push_back(newBall);
-            }
-            balls.insert(balls.end(), newBalls.begin(), newBalls.end());
-            for (size_t i = 0; i < newBalls.size(); ++i)
-                ballTrails.emplace_back();
-            // 分裂不占用buff计时器
-        }
-        break;
-        default: break;
-    }
-}
-
-// ======================== 更新Buff ========================
-void Game::UpdateBuffs(float dt) {
-    if (!buffActive) return;
-    buffTimer -= dt;
-    if (buffTimer <= 0.0f) {
-        paddle.SetWidth(originalPaddleWidth);
-        for (auto& b : balls) b.SetRadius(originalBallRadius);
-        buffActive = false;
-    }
 }
 
 // ======================== 检查关卡过渡 ========================

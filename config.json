@@ -2,7 +2,7 @@
   "screen": { "width": 800, "height": 600 },
   "ball": { "radius": 10, "speed_x": 4, "speed_y": -5, "init_x": 400, "init_y": 300 },
   "paddle": { "width": 100, "height": 20, "speed": 10, "y_pos": 550 },
-  "game": { "initial_hearts": 10 },
+  "game": { "initial_hearts": 3 },
   "levels": [
     { "rows": 5, "cols": 5, "brick_height": 25, "spacing": 10, "start_y": 80, "margin": 40 },
     { "rows": 4, "cols": 6, "brick_height": 25, "spacing": 10, "start_y": 80, "margin": 40 },
@@ -21,7 +21,33 @@
     "buff_duration": 5.0,
     "paddle_extend_factor": 1.5,
     "ball_enlarge_factor": 1.5,
-    "ball_shrink_factor": 0.7
+    "ball_shrink_factor": 0.7,
+    "paddle_extend": {
+      "duration": 5.0,
+      "factor": 1.5,
+      "glow_color": "#4488FF"
+    },
+    "ball_enlarge": {
+      "duration": 5.0,
+      "factor": 1.5,
+      "glow_color": "#44FF44"
+    },
+    "ball_shrink": {
+      "duration": 5.0,
+      "factor": 0.7,
+      "glow_color": "#FF4444"
+    },
+    "explosion": {
+      "duration": 5.0,
+      "glow_color": "#FF8800"
+    },
+    "invincible": {
+      "duration": 5.0,
+      "glow_color": "#FFD700"
+    },
+    "split": {
+      "glow_color": "#44CCFF"
+    }
   },
   "particles": {
     "count_per_brick": 12,

@@ -1,3 +1,4 @@
+// Ball.h
 #ifndef BALL_H
 #define BALL_H
 
@@ -13,8 +14,9 @@ private:
     float radius;
 public:
     Ball(Vector2 pos, Vector2 sp, float r);
+    virtual ~Ball() = default;   // 虚析构函数，安全起见
     void Move();
-    void Draw();
+    virtual void Draw();         // 改为虚函数，允许子类重写
     void BounceEdge(int screenWidth, int screenHeight);
 
     Vector2 GetPosition() const { return position; }

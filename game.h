@@ -8,10 +8,10 @@
 #include "SkillBall.h"
 #include "Particle.h"
 #include "LevelManager.h"
+#include "Effect.h"
 #include <deque>
 #include <vector>
-#include <fstream>
-#include <iostream>
+#include <memory>
 
 #include "json.hpp"
 using json = nlohmann::json;
@@ -34,7 +34,7 @@ private:
     json config;
 
     // 游戏对象
-    std::vector<Ball> balls;          // 改为多球
+    std::vector<Ball> balls;
     Paddle paddle;
     std::vector<Brick> bricks;
 
@@ -49,8 +49,8 @@ private:
     Rectangle continueBtn;
     Rectangle restartBtn;
     Rectangle gameOverRestartBtn;
-    Rectangle replayBtn;              // 新增
-    Rectangle goAheadBtn;             // 新增
+    Rectangle replayBtn;
+    Rectangle goAheadBtn;
 
     // 纹理
     Texture2D backgroundTex;
@@ -63,26 +63,22 @@ private:
     PauseCause pauseCause;
 
     // 系统
-    std::vector<std::deque<Vector2>> ballTrails;  // 每个球单独拖尾
+    std::vector<std::deque<Vector2>> ballTrails;
     ParticleSystem particleSystem;
     std::vector<SkillBall> skillBalls;
     LevelManager levelManager;
 
-    // Buff 系统
-    float buffTimer = 0.0f;
-    SkillType activeBuffType = SkillType::PADDLE_EXTEND; // 初始值，实际会被覆盖
+    // 效果系统（工厂模式）
+    std::unique_ptr<Effect> activeEffect;
+
+    // 原始尺寸（用于恢复）
     float originalPaddleWidth;
     float originalBallRadius;
-    bool buffActive = false;
 
     // 技能球配置
     float skillDropChance;
     float skillBallSpeedY;
     float skillBallRadius;
-    float buffDuration;
-    float paddleExtendFactor;
-    float ballEnlargeFactor;
-    float ballShrinkFactor;
 
     // 粒子配置
     int particlesPerBrick;
@@ -107,10 +103,10 @@ private:
     void ResetBricks();
     void CheckBallHitRedLine();
     void LoadLevel(int index);
-    void ApplySkillEffect(SkillType type);
-    void UpdateBuffs(float dt);
+    void ApplyEffect(std::unique_ptr<Effect> effect);
+    void UpdateEffects(float dt);
     void CheckLevelTransition();
-    void HandleBallCollisions(); // 球间碰撞
+    void HandleBallCollisions();
 
 public:
     Game(int screenWidth, int screenHeight);
@@ -125,6 +121,17 @@ public:
     GameState GetState() const { return currentState; }
     int GetHearts() const { return hearts; }
     void SimulateBallDrop() { CheckBallHitRedLine(); }
+
+    // 供 Effect 访问的方法
+    Paddle& GetPaddle() { return paddle; }
+    std::vector<Ball>& GetBalls() { return balls; }
+    float GetOriginalPaddleWidth() const { return originalPaddleWidth; }
+    float GetOriginalBallRadius() const { return originalBallRadius; }
+    void AddBallTrail() { ballTrails.emplace_back(); }
+    
+    // 检查当前激活效果的类型（用于伤害判定等）
+    bool HasEffectOfType(const std::string& typeName) const;
+    const Effect* GetActiveEffect() const { return activeEffect.get(); }
 };
 
 #endif

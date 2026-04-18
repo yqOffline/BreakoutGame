@@ -5,29 +5,27 @@
 #include "Paddle.h"
 
 enum class SkillType {
-    PADDLE_EXTEND,  // 板变长 (白色)
-    BALL_ENLARGE,   // 球变大 (绿色)
-    BALL_SHRINK,     // 球变小 (红色)
-    EXPLOSION,      //爆炸球 (橙色)
-    INVINCIBLE,     //无敌球(金色)
-    SPLIT           //分裂球 (青色)
+    PADDLE_EXTEND,  // 板变长
+    BALL_ENLARGE,   // 球变大
+    BALL_SHRINK,    // 球变小
+    EXPLOSION,      // 爆炸球
+    INVINCIBLE,     // 无敌球
+    SPLIT           // 分裂球
 };
 
 class SkillBall : public Ball {
 public:
     SkillType skillType;
     bool active;
+    Color glowColor;        // 光晕颜色（从配置读取）
+    float glowIntensity;    // 光晕强度（可选）
     
-    SkillBall(Vector2 pos, SkillType type, float radius, Vector2 speed);
+    SkillBall(Vector2 pos, SkillType type, float radius, Vector2 speed, Color glow = WHITE);
     
     void Update(float dt);
-    void Draw();
+    void Draw() override;   // 重写绘制，增加光晕
     
-    // 应用效果到挡板和主球，返回效果持续时间（秒）
-    float ApplyEffect(Paddle& paddle, Ball& mainBall) const;
-    
-    // 获取对应颜色
-    Color GetColor() const;
+    // 移除 ApplyEffect 方法，效果管理交给工厂模式
 };
 
 #endif // SKILL_BALL_H
