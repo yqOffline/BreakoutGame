@@ -13,6 +13,8 @@
 #include <deque>
 #include <vector>
 #include <memory>
+#include <string>
+#include <algorithm>
 
 #include "json.hpp"
 using json = nlohmann::json;
@@ -23,7 +25,8 @@ enum class GameState {
     PAUSED,
     GAME_OVER,
     LEVEL_CLEAR,
-    VICTORY
+    VICTORY,
+    RANKING
 };
 
 enum class PauseCause {
@@ -31,21 +34,29 @@ enum class PauseCause {
     LIFE_LOSS_PAUSE
 };
 
+struct RankRecord {
+    float time;
+    int deaths;
+    std::string timestamp;
+    
+    bool operator<(const RankRecord& other) const {
+        if (time != other.time) return time < other.time;
+        return deaths < other.deaths;
+    }
+};
+
 class Game {
 private:
     json config;
 
-    // 游戏对象
     std::vector<Ball> balls;
     Paddle paddle;
     std::vector<Brick> bricks;
 
-    // 游戏数据
     int score;
     int hearts;
     float paddleMoveSpeed;
 
-    // UI
     Rectangle redLine;
     Rectangle startBtn;
     Rectangle continueBtn;
@@ -54,47 +65,41 @@ private:
     Rectangle replayBtn;
     Rectangle goAheadBtn;
     Rectangle victoryRestartBtn;
+    Rectangle victoryReplayBtn;
+    Rectangle rankBtn;
+    Rectangle eraseRankBtn;      // 新增：清空排行榜按钮
+    Rectangle backBtn;
 
-    // 纹理
     Texture2D backgroundTex;
     Texture2D paddleTex;
     bool bgLoaded;
     bool paddleLoaded;
 
-    // 状态机
     GameState currentState;
     PauseCause pauseCause;
 
-    // 系统
     std::vector<std::deque<Vector2>> ballTrails;
     ParticleSystem particleSystem;
     std::vector<SkillBall> skillBalls;
     LevelManager levelManager;
 
-    // 效果系统（工厂模式）
     std::unique_ptr<Effect> activeEffect;
 
-    // 原始尺寸（用于恢复）
     float originalPaddleWidth;
     float originalBallRadius;
 
-    // 技能球配置
     float skillDropChance;
     float skillBallSpeedY;
     float skillBallRadius;
 
-    // 粒子配置
     int particlesPerBrick;
     float particleGravity;
 
-    // 拖尾配置
     int maxTrailLength;
 
-    // 关卡
     int currentLevel = 0;
     int totalLevels = 0;
 
-    // 最后砖块动画相关
     bool lastBrickAnimating = false;
     int lastBrickIndex = -1;
     Rectangle lastBrickStartRect;
@@ -102,8 +107,15 @@ private:
     float lastBrickAnimTimer = 0.0f;
     const float lastBrickAnimDuration = 1.0f;
 
-    // 音效管理器
     SoundManager soundManager;
+
+    float gameTimer;
+    int totalDeaths;
+    bool timerRunning;
+
+    std::vector<RankRecord> rankList;
+    static const int MAX_RANK_COUNT = 5;
+    const std::string rankFileName = "rank.dat";
 
     void ResetBricks();
     void CheckBallHitRedLine();
@@ -113,6 +125,11 @@ private:
     void CheckLevelTransition();
     void HandleBallCollisions();
 
+    void LoadRanking();
+    void SaveRanking();
+    void AddVictoryRecord();
+    void ResetGameState();
+    void ClearRanking();         // 新增：清空排行榜
 
 public:
     Game(int screenWidth, int screenHeight);
@@ -128,14 +145,12 @@ public:
     int GetHearts() const { return hearts; }
     void SimulateBallDrop() { CheckBallHitRedLine(); }
 
-    // 供 Effect 访问的方法
     Paddle& GetPaddle() { return paddle; }
     std::vector<Ball>& GetBalls() { return balls; }
     float GetOriginalPaddleWidth() const { return originalPaddleWidth; }
     float GetOriginalBallRadius() const { return originalBallRadius; }
     void AddBallTrail() { ballTrails.emplace_back(); }
     
-    // 检查当前激活效果的类型（用于伤害判定等）
     bool HasEffectOfType(const std::string& typeName) const;
     const Effect* GetActiveEffect() const { return activeEffect.get(); }
 };
