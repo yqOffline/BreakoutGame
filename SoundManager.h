@@ -8,10 +8,8 @@ public:
     SoundManager();
     ~SoundManager();
 
-    void PlayBallPaddle();
-    void PlayBallBrick();
-    void PlayBallWall();
-    void PlayBallBall();
+    // 整合后的碰撞音效
+    void PlayHitSound();
     void PlayPowerupGet();
     void PlayPowerupEnd();
     void PlayLevelComplete();
@@ -20,10 +18,7 @@ public:
     void PlayGameOver();
 
 private:
-    Sound sndBallPaddle;
-    Sound sndBallBrick;
-    Sound sndBallWall;
-    Sound sndBallBall;
+    Sound sndHit;               // 统一碰撞音效
     Sound sndPowerupGet;
     Sound sndPowerupEnd;
     Sound sndLevelComplete;

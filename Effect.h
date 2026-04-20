@@ -3,25 +3,28 @@
 
 #include "raylib.h"
 #include <string>
-#include <functional>
 #include <memory>
 
-class Game;  // 前向声明
+class Game;
 
-// 效果基类
+enum class EffectType {
+    PaddleExtend,
+    BallEnlarge,
+    BallShrink,
+    Explosion,
+    Invincible,
+    Split
+};
+
 class Effect {
 public:
     Effect(float duration, const std::string& name = "Effect");
     virtual ~Effect() = default;
     
-    // 应用效果（在激活时调用一次）
     virtual void Apply(Game* game) = 0;
-    
-    // 撤销效果（在持续时间结束或被覆盖时调用）
     virtual void Revert(Game* game) = 0;
-    
-    // 每帧更新（可选），返回是否仍有效
     virtual bool Update(float dt) { timer -= dt; return timer > 0.0f; }
+    virtual EffectType GetType() const = 0;
     
     float GetRemainingTime() const { return timer; }
     const std::string& GetName() const { return name; }
@@ -31,12 +34,13 @@ protected:
     std::string name;
 };
 
-// 具体效果类
+// 各具体效果类需实现 GetType()
 class PaddleExtendEffect : public Effect {
 public:
     PaddleExtendEffect(float duration, float factor);
     void Apply(Game* game) override;
     void Revert(Game* game) override;
+    EffectType GetType() const override { return EffectType::PaddleExtend; }
 private:
     float extendFactor;
 };
@@ -46,6 +50,7 @@ public:
     BallEnlargeEffect(float duration, float factor);
     void Apply(Game* game) override;
     void Revert(Game* game) override;
+    EffectType GetType() const override { return EffectType::BallEnlarge; }
 private:
     float enlargeFactor;
 };
@@ -55,6 +60,7 @@ public:
     BallShrinkEffect(float duration, float factor);
     void Apply(Game* game) override;
     void Revert(Game* game) override;
+    EffectType GetType() const override { return EffectType::BallShrink; }
 private:
     float shrinkFactor;
 };
@@ -64,7 +70,8 @@ public:
     ExplosionEffect(float duration);
     void Apply(Game* game) override;
     void Revert(Game* game) override;
-    bool Update(float dt) override;  // 每帧更新（可留空）
+    bool Update(float dt) override;
+    EffectType GetType() const override { return EffectType::Explosion; }
 };
 
 class InvincibleEffect : public Effect {
@@ -72,14 +79,16 @@ public:
     InvincibleEffect(float duration);
     void Apply(Game* game) override;
     void Revert(Game* game) override;
+    EffectType GetType() const override { return EffectType::Invincible; }
 };
 
 class SplitEffect : public Effect {
 public:
-    SplitEffect();  // 瞬时效果，duration=0
+    SplitEffect();
     void Apply(Game* game) override;
     void Revert(Game* game) override {}
-    bool Update(float dt) override { return false; } // 瞬时结束
+    bool Update(float dt) override { return false; }
+    EffectType GetType() const override { return EffectType::Split; }
 };
 
-#endif // EFFECT_H
+#endif

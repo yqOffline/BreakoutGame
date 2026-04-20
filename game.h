@@ -67,7 +67,7 @@ private:
     Rectangle victoryRestartBtn;
     Rectangle victoryReplayBtn;
     Rectangle rankBtn;
-    Rectangle eraseRankBtn;      // 新增：清空排行榜按钮
+    Rectangle eraseRankBtn;
     Rectangle backBtn;
 
     Texture2D backgroundTex;
@@ -83,7 +83,7 @@ private:
     std::vector<SkillBall> skillBalls;
     LevelManager levelManager;
 
-    std::unique_ptr<Effect> activeEffect;
+    std::vector<std::unique_ptr<Effect>> activeEffects;  // 改为容器
 
     float originalPaddleWidth;
     float originalBallRadius;
@@ -129,7 +129,7 @@ private:
     void SaveRanking();
     void AddVictoryRecord();
     void ResetGameState();
-    void ClearRanking();         // 新增：清空排行榜
+    void ClearRanking();
 
 public:
     Game(int screenWidth, int screenHeight);
@@ -152,7 +152,7 @@ public:
     void AddBallTrail() { ballTrails.emplace_back(); }
     
     bool HasEffectOfType(const std::string& typeName) const;
-    const Effect* GetActiveEffect() const { return activeEffect.get(); }
+    const std::vector<std::unique_ptr<Effect>>& GetActiveEffects() const { return activeEffects; }
 };
 
 #endif

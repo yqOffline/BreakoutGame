@@ -1,4 +1,3 @@
-// Ball.h
 #ifndef BALL_H
 #define BALL_H
 
@@ -14,10 +13,10 @@ private:
     float radius;
 public:
     Ball(Vector2 pos, Vector2 sp, float r);
-    virtual ~Ball() = default;   // 虚析构函数，安全起见
+    virtual ~Ball() = default;
     void Move();
-    virtual void Draw();         // 改为虚函数，允许子类重写
-    bool BounceEdge(int screenWidth, int screenHeight);
+    virtual void Draw();
+    bool BounceEdge(int screenWidth, int screenHeight);  // 返回是否碰撞
 
     Vector2 GetPosition() const { return position; }
     Vector2 GetSpeed() const { return speed; }
@@ -27,7 +26,7 @@ public:
     void SetRadius(float r) { radius = r; }
 
     bool CheckCollisionPaddle(Paddle& paddle);
-    void CheckCollisionBricks(std::vector<Brick>& bricks,int& score);
+    void CheckCollisionBricks(std::vector<Brick>& bricks, int& score);
 };
 
 #endif

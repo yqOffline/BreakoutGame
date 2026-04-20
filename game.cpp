@@ -83,7 +83,7 @@ Game::Game(int screenWidth, int screenHeight)
     victoryReplayBtn  = { (float)screenWidth / 2 + 10,  (float)screenHeight / 2 + 40, 120, 50 };
 
     rankBtn = { (float)screenWidth / 2 - 130, (float)screenHeight / 2 + 40, 120, 50 };
-    eraseRankBtn = { (float)screenWidth / 2 + 10, (float)screenHeight / 2 + 40, 120, 50 };  // 新增
+    eraseRankBtn = { (float)screenWidth / 2 + 10, (float)screenHeight / 2 + 40, 120, 50 };
 
     backBtn = { (float)screenWidth / 2 - 60, (float)screenHeight - 80, 120, 50 };
 
@@ -135,10 +135,10 @@ void Game::ResetGameState() {
     skillBalls.clear();
     particleSystem.Clear();
     
-    if (activeEffect) {
-        activeEffect->Revert(this);
-        activeEffect.reset();
+    for (auto& effect : activeEffects) {
+        effect->Revert(this);
     }
+    activeEffects.clear();
     paddle.SetWidth(originalPaddleWidth);
     for (auto& ball : balls) {
         ball.SetRadius(originalBallRadius);
@@ -210,26 +210,43 @@ void Game::CheckBallHitRedLine() {
 }
 
 void Game::ApplyEffect(std::unique_ptr<Effect> effect) {
-    if (activeEffect && effect->GetName() != "Split") {
-        activeEffect->Revert(this);
+    if (!effect) return;
+    
+    // 检查是否已有相同类型的效果，若有则移除旧效果（用新效果刷新持续时间）
+    EffectType newType = effect->GetType();
+    for (auto it = activeEffects.begin(); it != activeEffects.end(); ++it) {
+        if ((*it)->GetType() == newType) {
+            (*it)->Revert(this);
+            activeEffects.erase(it);
+            break;
+        }
     }
-    activeEffect = std::move(effect);
-    if (activeEffect) {
-        activeEffect->Apply(this);
-    }
+    
+    // 添加新效果
+    effect->Apply(this);
+    activeEffects.push_back(std::move(effect));
 }
 
 void Game::UpdateEffects(float dt) {
-    if (!activeEffect) return;
-    bool stillActive = activeEffect->Update(dt);
-    if (!stillActive) {
-        activeEffect->Revert(this);
-        activeEffect.reset();
+    for (auto it = activeEffects.begin(); it != activeEffects.end(); ) {
+        bool stillActive = (*it)->Update(dt);
+        if (!stillActive) {
+            soundManager.PlayPowerupEnd();
+            (*it)->Revert(this);
+            it = activeEffects.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
 bool Game::HasEffectOfType(const std::string& typeName) const {
-    return activeEffect && activeEffect->GetName() == typeName;
+    for (const auto& effect : activeEffects) {
+        if (effect->GetName() == typeName) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void Game::HandleInput(Vector2 mousePos) {
@@ -327,6 +344,7 @@ void Game::HandleBallCollisions() {
             float dy = posA.y - posB.y;
             float dist = sqrtf(dx*dx + dy*dy);
             if (dist < radiusSum && dist > 0.001f) {
+                soundManager.PlayHitSound();  // 球间碰撞音效
                 Vector2 spA = a.GetSpeed();
                 Vector2 spB = b.GetSpeed();
                 Vector2 normal = { dx / dist, dy / dist };
@@ -384,17 +402,22 @@ void Game::Update(float dt) {
         if ((int)ballTrails[i].size() > maxTrailLength) ballTrails[i].pop_front();
     }
 
-    // 2. 主球移动与碰撞
+    // 2. 主球移动与碰撞（含音效）
     for (auto& ball : balls) {
         ball.Move();
-        ball.BounceEdge(GetScreenWidth(), GetScreenHeight());
-        ball.CheckCollisionPaddle(paddle);
+        if (ball.BounceEdge(GetScreenWidth(), GetScreenHeight())) {
+            soundManager.PlayHitSound();
+        }
+        if (ball.CheckCollisionPaddle(paddle)) {
+            soundManager.PlayHitSound();
+        }
     }
 
-    // 3. 砖块碰撞处理
+    // 3. 砖块碰撞处理（含音效）
     for (auto& ball : balls) {
         for (auto& brick : bricks) {
             if (brick.IsActive() && CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), brick.GetRectangle())) {
+                soundManager.PlayHitSound();
                 int damage = 1;
                 if (HasEffectOfType("Explosion")) {
                     damage = 2;
@@ -438,13 +461,14 @@ void Game::Update(float dt) {
         }
     }
 
-    // 4. 球间碰撞
+    // 4. 球间碰撞（内部已含音效）
     HandleBallCollisions();
 
     // 5. 技能球更新
     for (auto& sb : skillBalls) {
         sb.Update(dt);
         if (sb.active && CheckCollisionCircleRec(sb.GetPosition(), sb.GetRadius(), paddle.GetRectangle())) {
+            soundManager.PlayPowerupGet();
             auto effect = EffectFactory::CreateEffect(sb.skillType);
             if (effect) {
                 ApplyEffect(std::move(effect));
@@ -458,15 +482,8 @@ void Game::Update(float dt) {
     // 6. 粒子更新
     particleSystem.Update(dt, particleGravity);
 
-    // 7. 效果更新
-    if (activeEffect) {
-        bool stillActive = activeEffect->Update(dt);
-        if (!stillActive) {
-            soundManager.PlayPowerupEnd();
-            activeEffect->Revert(this);
-            activeEffect.reset();
-        }
-    }
+    // 7. 效果更新（内部会处理过期和音效）
+    UpdateEffects(dt);
 
     // 8. 挡板移动
     if (IsKeyDown(KEY_LEFT)) paddle.MoveLeft(paddleMoveSpeed);
@@ -562,8 +579,11 @@ void Game::Draw() {
     DrawText(TextFormat("TIME: %.1f", gameTimer), 10, 100, 20, DARKPURPLE);
     DrawText(TextFormat("DEATHS: %d", totalDeaths), 10, 130, 20, MAROON);
 
-    if (activeEffect) {
-        DrawText(TextFormat("%s: %.1fs", activeEffect->GetName().c_str(), activeEffect->GetRemainingTime()), 10, 160, 20, GREEN);
+    // 显示所有激活效果
+    int effectY = 160;
+    for (const auto& effect : activeEffects) {
+        DrawText(TextFormat("%s: %.1fs", effect->GetName().c_str(), effect->GetRemainingTime()), 10, effectY, 20, GREEN);
+        effectY += 20;
     }
 
     switch (currentState) {
@@ -661,10 +681,10 @@ void Game::LoadLevel(int index) {
     lastBrickIndex = -1;
     lastBrickAnimTimer = 0.0f;
 
-    if (activeEffect) {
-        activeEffect->Revert(this);
-        activeEffect.reset();
+    for (auto& effect : activeEffects) {
+        effect->Revert(this);
     }
+    activeEffects.clear();
     paddle.SetWidth(originalPaddleWidth);
     for (auto& ball : balls) {
         ball.SetRadius(originalBallRadius);
@@ -682,10 +702,12 @@ void Game::CheckLevelTransition() {
     if (allInactive && currentState == GameState::PLAYING) {
         if (currentLevel + 1 < totalLevels) {
             currentState = GameState::LEVEL_CLEAR;
+            soundManager.PlayLevelComplete();
             for (auto& b : balls) b.SetSpeed({0, 0});
         } else {
             currentState = GameState::VICTORY;
             timerRunning = false;
+            soundManager.PlayGameVictory();
             AddVictoryRecord();
             for (auto& b : balls) b.SetSpeed({0, 0});
         }
