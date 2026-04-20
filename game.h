@@ -9,6 +9,7 @@
 #include "Particle.h"
 #include "LevelManager.h"
 #include "Effect.h"
+#include "SoundManager.h"
 #include <deque>
 #include <vector>
 #include <memory>
@@ -21,7 +22,8 @@ enum class GameState {
     PLAYING,
     PAUSED,
     GAME_OVER,
-    LEVEL_CLEAR
+    LEVEL_CLEAR,
+    VICTORY
 };
 
 enum class PauseCause {
@@ -51,6 +53,7 @@ private:
     Rectangle gameOverRestartBtn;
     Rectangle replayBtn;
     Rectangle goAheadBtn;
+    Rectangle victoryRestartBtn;
 
     // 纹理
     Texture2D backgroundTex;
@@ -99,7 +102,9 @@ private:
     float lastBrickAnimTimer = 0.0f;
     const float lastBrickAnimDuration = 1.0f;
 
-    // 私有方法
+    // 音效管理器
+    SoundManager soundManager;
+
     void ResetBricks();
     void CheckBallHitRedLine();
     void LoadLevel(int index);
@@ -107,6 +112,7 @@ private:
     void UpdateEffects(float dt);
     void CheckLevelTransition();
     void HandleBallCollisions();
+
 
 public:
     Game(int screenWidth, int screenHeight);

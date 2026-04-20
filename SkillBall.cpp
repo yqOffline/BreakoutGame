@@ -22,17 +22,15 @@ void SkillBall::Draw() {
     
     Vector2 center = GetPosition();
     float radius = GetRadius();
+    int cx = (int)center.x;
+    int cy = (int)center.y;
     
-    // 光晕效果：绘制多层半透明渐变圆
-    // 外层光晕
-    DrawCircleGradient((int)center.x, (int)center.y, radius * 2.5f,
-                       Fade(glowColor, 0.0f), Fade(glowColor, 0.3f));
-    DrawCircleGradient((int)center.x, (int)center.y, radius * 2.0f,
-                       Fade(glowColor, 0.2f), Fade(glowColor, 0.5f));
-    DrawCircleGradient((int)center.x, (int)center.y, radius * 1.5f,
-                       Fade(glowColor, 0.4f), Fade(glowColor, 0.8f));
+    // 光晕效果：使用简单的半透明圆代替渐变（避免兼容问题）
+    DrawCircle(cx, cy, radius * 2.5f, Fade(glowColor, 0.15f));
+    DrawCircle(cx, cy, radius * 2.0f, Fade(glowColor, 0.25f));
+    DrawCircle(cx, cy, radius * 1.5f, Fade(glowColor, 0.4f));
     
-    // 主体球（根据技能类型显示不同颜色）
+    // 主体球颜色
     Color mainColor;
     switch (skillType) {
         case SkillType::PADDLE_EXTEND: mainColor = WHITE; break;
@@ -46,5 +44,5 @@ void SkillBall::Draw() {
     DrawCircleV(center, radius, mainColor);
     
     // 内层高光
-    DrawCircleV({center.x - radius*0.2f, center.y - radius*0.2f}, radius*0.3f, Fade(WHITE, 0.6f));
+    DrawCircleV({center.x - radius * 0.2f, center.y - radius * 0.2f}, radius * 0.3f, Fade(WHITE, 0.6f));
 }

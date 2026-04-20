@@ -1,5 +1,6 @@
 #include "game.h"
 #include "EffectFactory.h"
+#include "SoundManager.h"
 #include <fstream>
 #include <iostream>
 #include <cmath>
@@ -71,6 +72,7 @@ Game::Game(int screenWidth, int screenHeight)
     gameOverRestartBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 + 40, 120, 50 };
     replayBtn = { (float)screenWidth / 2 - 160, (float)screenHeight / 2 + 20, 120, 50 };
     goAheadBtn = { (float)screenWidth / 2 + 40, (float)screenHeight / 2 + 20, 120, 50 };
+    victoryRestartBtn = { (float)screenWidth / 2 -60,(float)screenHeight / 2 + 40,120,50};
 
     // 9. 加载纹理
     backgroundTex = LoadTexture("1.png");
@@ -141,9 +143,13 @@ void Game::CheckBallHitRedLine() {
         hearts--;
         if (hearts <= 0) {
             currentState = GameState::GAME_OVER;
+            soundManager.PlayGameOver();
         } else {
             currentState = GameState::PAUSED;
             pauseCause = PauseCause::LIFE_LOSS_PAUSE;
+
+            soundManager.PlayLevelOver();
+
             float paddleCenterX = paddle.GetRectangle().x + paddle.GetRectangle().width / 2;
             float paddleTopY = paddle.GetRectangle().y - originalBallRadius - 2;
             balls.emplace_back(Vector2{paddleCenterX, paddleTopY},
@@ -212,6 +218,7 @@ void Game::HandleInput(Vector2 mousePos) {
             break;
 
         case GameState::GAME_OVER:
+            //soundManager.PlayGameOver();
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, gameOverRestartBtn)) || IsKeyPressed(KEY_SPACE)) {
                 ResetGame();
             }
@@ -230,6 +237,11 @@ void Game::HandleInput(Vector2 mousePos) {
                 currentState = GameState::PLAYING;
             }
             break;
+        case GameState::VICTORY:
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, victoryRestartBtn)) || IsKeyPressed(KEY_SPACE)) {
+                ResetGame();
+            }
+            break;        
     }
 }
 
@@ -272,6 +284,20 @@ void Game::HandleBallCollisions() {
 // ======================== 【状态机】逻辑更新 ========================
 void Game::Update(float dt) {
     if (currentState != GameState::PLAYING) return;
+
+    //===================后门====================
+    if (IsKeyPressed(KEY_L)) {
+        // 直接通关当前关卡，进入 LEVEL_CLEAR 状态
+        currentState = GameState::LEVEL_CLEAR;
+        for (auto& b : balls) b.SetSpeed({0, 0});
+        return;  // 跳过本帧其余更新
+    }
+    if (IsKeyPressed(KEY_W)) {
+        // 直接游戏胜利，进入 VICTORY 状态
+        currentState = GameState::VICTORY;
+        for (auto& b : balls) b.SetSpeed({0, 0});
+        return;
+    }    
 
     // 1. 拖尾记录
     for (size_t i = 0; i < balls.size(); ++i) {
@@ -356,8 +382,15 @@ void Game::Update(float dt) {
     // 6. 粒子更新
     particleSystem.Update(dt, particleGravity);
 
-    // 7. 效果更新
-    UpdateEffects(dt);
+    // 7. 效果更新（在效果结束时播放音效）
+    if (activeEffect) {
+        bool stillActive = activeEffect->Update(dt);
+        if (!stillActive) {
+            soundManager.PlayPowerupEnd();
+            activeEffect->Revert(this);
+            activeEffect.reset();
+        }
+    }
 
     // 8. 挡板移动
     if (IsKeyDown(KEY_LEFT)) paddle.MoveLeft(paddleMoveSpeed);
@@ -495,6 +528,13 @@ void Game::Draw() {
             DrawRectangleRec(goAheadBtn, CheckCollisionPointRec(GetMousePosition(), goAheadBtn) ? DARKGREEN : GREEN);
             DrawText("GO AHEAD (G)", goAheadBtn.x + 8, goAheadBtn.y + 15, 20, BLACK);
             break;
+        case GameState::VICTORY:
+            DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.8f));
+            DrawText("VICTORY!", GetScreenWidth() / 2 - 120, GetScreenHeight() / 2 - 40, 50, GOLD);
+            DrawText(TextFormat("FINAL SCORE: %d", score), GetScreenWidth() / 2 - 100, GetScreenHeight() / 2 + 20, 30, WHITE);
+            DrawRectangleRec(victoryRestartBtn, CheckCollisionPointRec(GetMousePosition(), victoryRestartBtn) ? DARKGREEN : GREEN);
+            DrawText("PLAY AGAIN", victoryRestartBtn.x + 10, victoryRestartBtn.y + 15, 20, BLACK);
+            break;        
         default: break;
     }
 }
@@ -550,7 +590,8 @@ void Game::CheckLevelTransition() {
             currentState = GameState::LEVEL_CLEAR;
             for (auto& b : balls) b.SetSpeed({0, 0});
         } else {
-            currentState = GameState::GAME_OVER;
+            currentState = GameState::VICTORY;
+            for (auto& b : balls) b.SetSpeed({0,0});
         }
     }
 }

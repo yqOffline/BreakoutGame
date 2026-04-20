@@ -17,7 +17,8 @@ void Ball::Draw() {
 }
 
 
-void Ball::BounceEdge(int screenWidth, int screenHeight) {
+bool Ball::BounceEdge(int screenWidth, int screenHeight) {
+    bool bounced = false;
     // 左右边界
     if (position.x - radius <= 0 || position.x + radius >= screenWidth) {
         speed.x *= -1;
@@ -30,9 +31,10 @@ void Ball::BounceEdge(int screenWidth, int screenHeight) {
     if (position.y + radius >= screenHeight) {
         speed.y *= -1;
     }
+    return bounced;
 }
 
-void Ball::CheckCollisionPaddle(Paddle& paddle)
+bool Ball::CheckCollisionPaddle(Paddle& paddle)
 {
     if (CheckCollisionCircleRec(position,radius,paddle.GetRectangle()))
     {
@@ -50,7 +52,9 @@ void Ball::CheckCollisionPaddle(Paddle& paddle)
                 speed.x = (speed.x > 0) ? 6 : -6;
             }
        }
+       return true;
     }
+    return false;
 }
 
 void Ball::CheckCollisionBricks(std::vector<Brick>& bricks, int& score)

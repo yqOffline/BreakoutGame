@@ -4,16 +4,15 @@
 
 // ======================== 构造函数 ========================
 SoundManager::SoundManager() {
-    // 加载普通音效文件（请确保文件存在于指定路径，或修改为你的实际路径）
-    // 支持 WAV、MP3、OGG 等格式
-    sndBallPaddle   = LoadSound("碰墙.wav");
-    sndBallBrick    = LoadSound("碰墙.wav");
-    sndBallWall     = LoadSound("碰墙.wav");
-    sndBallBall     = LoadSound("碰墙.wav");
-    sndLevelComplete = LoadSound("通关(Level).wav");
-    sndGameVictory  = LoadSound("通关掌声.wav");
-    sndLevelOver = LoadSound("levelover.wav");
-    sndGameOver = LoadSound("失败-生活.wav");
+
+    sndBallPaddle   = LoadSound("Hit.wav");
+    sndBallBrick    = LoadSound("Hit.wav");
+    sndBallWall     = LoadSound("Hit.wav");
+    sndBallBall     = LoadSound("Hit.wav");
+    sndLevelComplete = LoadSound("LevelWin.wav");
+    sndGameVictory  = LoadSound("GameWin.wav");
+    sndLevelOver = LoadSound("LevelOver.wav");
+    sndGameOver = LoadSound("GameOver.wav");
 
     // 程序生成上升/下降音效
     sndPowerupGet = GenerateRisingSound();

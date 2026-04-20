@@ -17,7 +17,7 @@ public:
     virtual ~Ball() = default;   // 虚析构函数，安全起见
     void Move();
     virtual void Draw();         // 改为虚函数，允许子类重写
-    void BounceEdge(int screenWidth, int screenHeight);
+    bool BounceEdge(int screenWidth, int screenHeight);
 
     Vector2 GetPosition() const { return position; }
     Vector2 GetSpeed() const { return speed; }
@@ -26,7 +26,7 @@ public:
     void SetSpeed(Vector2 sp) { speed = sp; }
     void SetRadius(float r) { radius = r; }
 
-    void CheckCollisionPaddle(Paddle& paddle);
+    bool CheckCollisionPaddle(Paddle& paddle);
     void CheckCollisionBricks(std::vector<Brick>& bricks,int& score);
 };
 
