@@ -13,10 +13,15 @@
 Game::Game(int screenWidth, int screenHeight)
     : score(0),
       hearts(3),
-      currentState(GameState::MENU),
+      currentState(GameState::MODE_SELECT),   // 初始为模式选择
       gameTimer(0.0f),
       totalDeaths(0),
-      timerRunning(false)
+      timerRunning(false),
+      isRaceMode(false),
+      isHost(false),
+      isGuest(false),
+      multiSubState(MultiplayerSubState::LOBBY),
+      showEraseHint(false),eraseHintTimer(0.0f)
 {
     // 1. 加载配置文件
     std::ifstream f("config.json");
@@ -64,27 +69,40 @@ Game::Game(int screenWidth, int screenHeight)
     originalPaddleWidth = paddle.GetWidth();
     originalBallRadius = balls[0].GetRadius();
 
-    // 7. 加载第一关
+    // 7. 加载第一关（但不立即开始）
     LoadLevel(0);
 
-    // 8. UI 按钮初始化
+    // 8. UI 按钮初始化（原有 + 新增）
     redLine = {
         0.0f, paddle.GetRectangle().y + paddle.GetRectangle().height + 5.0f,
         (float)screenWidth, 3.0f
     };
-    startBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 - 25, 120, 50 };
+    
+    // 模式选择按钮
+    singleBtn = { (float)screenWidth / 2 - 100, 200, 200, 50 };
+    raceBtn   = { (float)screenWidth / 2 - 100, 270, 200, 50 };
+    versusBtn = { (float)screenWidth / 2 - 100, 340, 200, 50 };
+    
+    // 单人菜单按钮（原 MENU 按钮）
+    startBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 - 100, 120, 50 };
+    rankBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 - 30, 120, 50 };
+    eraseRankBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 + 40, 120, 50 };
+    backToModeBtn = { (float)screenWidth / 2 - 60, (float)screenHeight - 80, 120, 50 };
+    
+    // 双人菜单按钮（竞速/对抗共用）
+    hostBtn = { (float)screenWidth / 2 - 150, 250, 120, 50 };
+    guestBtn = { (float)screenWidth / 2 + 30, 250, 120, 50 };
+    startGameBtn = { (float)screenWidth / 2 - 60, 350, 120, 50 };
+    backToModeBtn2 = { (float)screenWidth / 2 - 60, (float)screenHeight - 80, 120, 50 };
+    
+    // 原有其他按钮
     continueBtn = { (float)screenWidth / 2 - 100, (float)screenHeight / 2 - 25, 100, 50 };
     restartBtn = { (float)screenWidth / 2 + 20, (float)screenHeight / 2 - 25, 100, 50 };
     gameOverRestartBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 + 40, 120, 50 };
     replayBtn = { (float)screenWidth / 2 - 160, (float)screenHeight / 2 + 20, 120, 50 };
     goAheadBtn = { (float)screenWidth / 2 + 40, (float)screenHeight / 2 + 20, 120, 50 };
-
     victoryRestartBtn = { (float)screenWidth / 2 - 130, (float)screenHeight / 2 + 40, 120, 50 };
     victoryReplayBtn  = { (float)screenWidth / 2 + 10,  (float)screenHeight / 2 + 40, 120, 50 };
-
-    rankBtn = { (float)screenWidth / 2 - 130, (float)screenHeight / 2 + 40, 120, 50 };
-    eraseRankBtn = { (float)screenWidth / 2 + 10, (float)screenHeight / 2 + 40, 120, 50 };
-
     backBtn = { (float)screenWidth / 2 - 60, (float)screenHeight - 80, 120, 50 };
 
     // 9. 加载纹理
@@ -130,7 +148,7 @@ void Game::ResetGameState() {
     
     score = 0;
     hearts = config["game"]["initial_hearts"];
-    currentState = GameState::MENU;
+    currentState = GameState::MODE_SELECT;   // 重置后回到模式选择
     
     skillBalls.clear();
     particleSystem.Clear();
@@ -151,6 +169,11 @@ void Game::ResetGameState() {
     gameTimer = 0.0f;
     totalDeaths = 0;
     timerRunning = false;
+    
+    // 重置双人状态
+    isHost = false;
+    isGuest = false;
+    multiSubState = MultiplayerSubState::LOBBY;
 }
 
 void Game::ResetGame() {
@@ -212,7 +235,6 @@ void Game::CheckBallHitRedLine() {
 void Game::ApplyEffect(std::unique_ptr<Effect> effect) {
     if (!effect) return;
     
-    // 检查是否已有相同类型的效果，若有则移除旧效果（用新效果刷新持续时间）
     EffectType newType = effect->GetType();
     for (auto it = activeEffects.begin(); it != activeEffects.end(); ++it) {
         if ((*it)->GetType() == newType) {
@@ -222,7 +244,6 @@ void Game::ApplyEffect(std::unique_ptr<Effect> effect) {
         }
     }
     
-    // 添加新效果
     effect->Apply(this);
     activeEffects.push_back(std::move(effect));
 }
@@ -251,7 +272,23 @@ bool Game::HasEffectOfType(const std::string& typeName) const {
 
 void Game::HandleInput(Vector2 mousePos) {
     switch (currentState) {
-        case GameState::MENU:
+        case GameState::MODE_SELECT:
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, singleBtn)) || IsKeyPressed(KEY_ONE)) {
+                currentState = GameState::SINGLE_MENU;
+            }
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, raceBtn)) || IsKeyPressed(KEY_TWO)) {
+                isRaceMode = true;
+                currentState = GameState::MULTIPLAYER_MENU;
+                multiSubState = MultiplayerSubState::LOBBY;
+            }
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, versusBtn)) || IsKeyPressed(KEY_THREE)) {
+                isRaceMode = false;
+                currentState = GameState::MULTIPLAYER_MENU;
+                multiSubState = MultiplayerSubState::LOBBY;
+            }
+            break;
+
+        case GameState::SINGLE_MENU:
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) || IsKeyPressed(KEY_SPACE)) {
                 currentState = GameState::PLAYING;
                 for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
@@ -262,6 +299,61 @@ void Game::HandleInput(Vector2 mousePos) {
             }
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, eraseRankBtn)) || IsKeyPressed(KEY_E)) {
                 ClearRanking();
+                showEraseHint = true;
+                eraseHintTimer = 0.5f;
+            }
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backToModeBtn)) || IsKeyPressed(KEY_B)) {
+                currentState = GameState::MODE_SELECT;
+            }
+            break;
+
+        case GameState::MULTIPLAYER_MENU:
+        case GameState::MULTIPLAYER_LOBBY:
+            // 双人等待界面（选择 Host/Guest）
+            if (multiSubState == MultiplayerSubState::LOBBY) {
+                // 处理 Host 按钮：点击或按 H 切换选中/取消
+                if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, hostBtn)) || IsKeyPressed(KEY_H)) {
+                    if (isHost) {
+                        isHost = false;
+                    } else {
+                        isHost = true;
+                        isGuest = false;
+                    }
+                }
+                // 处理 Guest 按钮：点击或按 G 切换选中/取消
+                if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, guestBtn)) || IsKeyPressed(KEY_G)) {
+                    if (isGuest) {
+                        isGuest = false;
+                    } else {
+                        isGuest = true;
+                        isHost = false;
+                    }
+                }
+                // READY 按钮：仅当 isHost 时有效
+                if (isHost && ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startGameBtn)) || IsKeyPressed(KEY_S))) {
+                    multiSubState = MultiplayerSubState::READY;
+                    currentState = GameState::MULTIPLAYER_READY;
+                }
+                // 返回按钮
+                if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backToModeBtn2)) || IsKeyPressed(KEY_B)) {
+                    currentState = GameState::MODE_SELECT;
+                    isHost = isGuest = false;
+                }
+            }
+            break;
+
+        case GameState::MULTIPLAYER_READY:
+            // 准备开始界面
+            if (isHost && ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startGameBtn)) || IsKeyPressed(KEY_S))) {
+                // 实际开始游戏（后续可接入网络同步）
+                currentState = GameState::PLAYING;
+                for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
+                timerRunning = true;
+            }
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backToModeBtn2)) || IsKeyPressed(KEY_BACKSPACE)) {
+                currentState = GameState::MODE_SELECT;
+                isHost = isGuest = false;
+                multiSubState = MultiplayerSubState::LOBBY;
             }
             break;
 
@@ -313,7 +405,7 @@ void Game::HandleInput(Vector2 mousePos) {
         case GameState::VICTORY:
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, victoryRestartBtn)) || IsKeyPressed(KEY_R)) {
                 ResetGameState();
-                currentState = GameState::MENU;
+                currentState = GameState::MODE_SELECT;
                 timerRunning = false;
             }
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, victoryReplayBtn)) || IsKeyPressed(KEY_P)) {
@@ -326,7 +418,7 @@ void Game::HandleInput(Vector2 mousePos) {
 
         case GameState::RANKING:
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtn)) || IsKeyPressed(KEY_B)) {
-                currentState = GameState::MENU;
+                currentState = GameState::SINGLE_MENU;
             }
             break;
     }
@@ -344,7 +436,7 @@ void Game::HandleBallCollisions() {
             float dy = posA.y - posB.y;
             float dist = sqrtf(dx*dx + dy*dy);
             if (dist < radiusSum && dist > 0.001f) {
-                soundManager.PlayHitSound();  // 球间碰撞音效
+                soundManager.PlayHitSound();
                 Vector2 spA = a.GetSpeed();
                 Vector2 spB = b.GetSpeed();
                 Vector2 normal = { dx / dist, dy / dist };
@@ -373,9 +465,18 @@ void Game::Update(float dt) {
         gameTimer += dt;
     }
 
+    // 更新清除排行榜提示计时器
+    if (showEraseHint) {
+        eraseHintTimer -= dt;
+        if (eraseHintTimer <= 0.0f) {
+            showEraseHint = false;
+            eraseHintTimer = 0.0f;
+        }
+    }
+
     if (currentState != GameState::PLAYING) return;
 
-    // 后门按键
+    // 后门按键（保持不变）
     if (IsKeyPressed(KEY_L)) {
         if (currentLevel == totalLevels - 1) {
             currentState = GameState::VICTORY;
@@ -402,7 +503,7 @@ void Game::Update(float dt) {
         if ((int)ballTrails[i].size() > maxTrailLength) ballTrails[i].pop_front();
     }
 
-    // 2. 主球移动与碰撞（含音效）
+    // 2. 主球移动与碰撞
     for (auto& ball : balls) {
         ball.Move();
         if (ball.BounceEdge(GetScreenWidth(), GetScreenHeight())) {
@@ -413,7 +514,7 @@ void Game::Update(float dt) {
         }
     }
 
-    // 3. 砖块碰撞处理（含音效）
+    // 3. 砖块碰撞处理
     for (auto& ball : balls) {
         for (auto& brick : bricks) {
             if (brick.IsActive() && CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), brick.GetRectangle())) {
@@ -461,7 +562,7 @@ void Game::Update(float dt) {
         }
     }
 
-    // 4. 球间碰撞（内部已含音效）
+    // 4. 球间碰撞
     HandleBallCollisions();
 
     // 5. 技能球更新
@@ -482,14 +583,14 @@ void Game::Update(float dt) {
     // 6. 粒子更新
     particleSystem.Update(dt, particleGravity);
 
-    // 7. 效果更新（内部会处理过期和音效）
+    // 7. 效果更新
     UpdateEffects(dt);
 
     // 8. 挡板移动
     if (IsKeyDown(KEY_LEFT)) paddle.MoveLeft(paddleMoveSpeed);
     if (IsKeyDown(KEY_RIGHT)) paddle.MoveRight(paddleMoveSpeed);
 
-    // 9. 最后一块砖特殊动画
+    // 9. 最后一块砖特殊动画（略）
     int activeCount = 0;
     int lastActiveIdx = -1;
     for (int i = 0; i < (int)bricks.size(); ++i) {
@@ -547,53 +648,106 @@ void Game::Draw() {
     DrawRectangle(0, 0, GetScreenWidth(), 5, GRAY);
     DrawRectangle(0, GetScreenHeight() - 5, GetScreenWidth(), 5, GRAY);
 
-    for (size_t i = 0; i < balls.size(); ++i) {
-        for (size_t j = 0; j < ballTrails[i].size(); ++j) {
-            float alpha = 0.3f * (float)j / ballTrails[i].size();
-            float size = balls[i].GetRadius() * (0.5f + 0.5f * j / ballTrails[i].size());
-            DrawCircleV(ballTrails[i][j], size, Fade(RED, alpha));
+    // 绘制游戏元素（仅在游戏进行中或相关状态）
+    if (currentState == GameState::PLAYING || currentState == GameState::PAUSED || 
+        currentState == GameState::LEVEL_CLEAR || currentState == GameState::GAME_OVER ||
+        currentState == GameState::VICTORY) {
+        
+        for (size_t i = 0; i < balls.size(); ++i) {
+            for (size_t j = 0; j < ballTrails[i].size(); ++j) {
+                float alpha = 0.3f * (float)j / ballTrails[i].size();
+                float size = balls[i].GetRadius() * (0.5f + 0.5f * j / ballTrails[i].size());
+                DrawCircleV(ballTrails[i][j], size, Fade(RED, alpha));
+            }
         }
+
+        for (auto& b : balls) b.Draw();
+
+        if (paddleLoaded) {
+            DrawTexturePro(paddleTex,
+                { 0, 0, (float)paddleTex.width, (float)paddleTex.height },
+                paddle.GetRectangle(), { 0, 0 }, 0, WHITE);
+        } else {
+            paddle.Draw();
+        }
+
+        for (auto& b : bricks) b.Draw();
+        for (auto& sb : skillBalls) sb.Draw();
+        particleSystem.Draw();
+
+        if (currentState == GameState::PLAYING) DrawRectangleRec(redLine, RED);
     }
 
-    for (auto& b : balls) b.Draw();
-
-    if (paddleLoaded) {
-        DrawTexturePro(paddleTex,
-            { 0, 0, (float)paddleTex.width, (float)paddleTex.height },
-            paddle.GetRectangle(), { 0, 0 }, 0, WHITE);
-    } else {
-        paddle.Draw();
-    }
-
-    for (auto& b : bricks) b.Draw();
-
-    for (auto& sb : skillBalls) sb.Draw();
-
-    particleSystem.Draw();
-
-    if (currentState == GameState::PLAYING) DrawRectangleRec(redLine, RED);
-
+    // UI 文字（分数、生命等）
     DrawText(TextFormat("SCORE: %d", score), 10, 10, 20, BLUE);
     DrawText(TextFormat("LIVES: %d", hearts), 10, 40, 20, RED);
     DrawText(TextFormat("LEVEL: %d", currentLevel + 1), 10, 70, 20, DARKGREEN);
     DrawText(TextFormat("TIME: %.1f", gameTimer), 10, 100, 20, DARKPURPLE);
     DrawText(TextFormat("DEATHS: %d", totalDeaths), 10, 130, 20, MAROON);
 
-    // 显示所有激活效果
     int effectY = 160;
     for (const auto& effect : activeEffects) {
         DrawText(TextFormat("%s: %.1fs", effect->GetName().c_str(), effect->GetRemainingTime()), 10, effectY, 20, GREEN);
         effectY += 20;
     }
 
+    // 根据不同状态绘制 UI
     switch (currentState) {
-        case GameState::MENU:
+        case GameState::MODE_SELECT:
+            DrawText("SELECT MODE", GetScreenWidth()/2 - 100, 120, 40, DARKBLUE);
+            DrawRectangleRec(singleBtn, CheckCollisionPointRec(GetMousePosition(), singleBtn) ? DARKGREEN : GREEN);
+            DrawText("SINGLE (1)", singleBtn.x + 30, singleBtn.y + 15, 20, BLACK);
+            DrawRectangleRec(raceBtn, CheckCollisionPointRec(GetMousePosition(), raceBtn) ? DARKBLUE : BLUE);
+            DrawText("RACE (2)", raceBtn.x + 40, raceBtn.y + 15, 20, WHITE);
+            DrawRectangleRec(versusBtn, CheckCollisionPointRec(GetMousePosition(), versusBtn) ? DARKPURPLE : PURPLE);
+            DrawText("VERSUS (3)", versusBtn.x + 30, versusBtn.y + 15, 20, WHITE);
+            break;
+
+        case GameState::SINGLE_MENU:
             DrawRectangleRec(startBtn, CheckCollisionPointRec(GetMousePosition(), startBtn) ? DARKGREEN : GREEN);
             DrawText("START GAME", startBtn.x + 12, startBtn.y + 15, 20, BLACK);
             DrawRectangleRec(rankBtn, CheckCollisionPointRec(GetMousePosition(), rankBtn) ? DARKBLUE : BLUE);
             DrawText("RANK (R)", rankBtn.x + 25, rankBtn.y + 15, 20, WHITE);
-            DrawRectangleRec(eraseRankBtn, CheckCollisionPointRec(GetMousePosition(), eraseRankBtn) ? DARKGRAY : GRAY);
+            DrawRectangleRec(eraseRankBtn, CheckCollisionPointRec(GetMousePosition(), eraseRankBtn) ? MAROON : RED);
             DrawText("ERASE (E)", eraseRankBtn.x + 20, eraseRankBtn.y + 15, 20, WHITE);
+            DrawRectangleRec(backToModeBtn, CheckCollisionPointRec(GetMousePosition(), backToModeBtn) ? DARKGRAY : GRAY);
+            DrawText("BACK", backToModeBtn.x + 35, backToModeBtn.y + 15, 20, WHITE);
+            // 显示清除排行榜提示
+            if (showEraseHint) {
+                DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.5f)); // 半透明遮罩可选
+                const char* hintText = "RANKING HAS BEEN ERASED!";
+                int fontSize = 30;
+                int textWidth = MeasureText(hintText, fontSize);
+                DrawText(hintText, GetScreenWidth()/2 - textWidth/2, GetScreenHeight()/2 - fontSize/2, fontSize, RED);
+            }
+            break;
+
+        case GameState::MULTIPLAYER_MENU:
+        case GameState::MULTIPLAYER_LOBBY:
+            DrawText(isRaceMode ? "RACE MODE" : "VERSUS MODE", GetScreenWidth()/2 - 120, 120, 40, DARKBLUE);
+            DrawRectangleRec(hostBtn, CheckCollisionPointRec(GetMousePosition(), hostBtn) ? (isHost ? DARKGREEN : DARKBLUE) : (isHost ? GREEN : BLUE));
+            DrawText("HOST (H)", hostBtn.x + 20, hostBtn.y + 15, 20, WHITE);
+            DrawRectangleRec(guestBtn, CheckCollisionPointRec(GetMousePosition(), guestBtn) ? (isGuest ? DARKGREEN : DARKBLUE) : (isGuest ? GREEN : BLUE));
+            DrawText("GUEST (G)", guestBtn.x + 15, guestBtn.y + 15, 20, WHITE);
+            if (isHost) {
+                DrawRectangleRec(startGameBtn, CheckCollisionPointRec(GetMousePosition(), startGameBtn) ? DARKGREEN : GREEN);
+                DrawText("READY (S)", startGameBtn.x + 20, startGameBtn.y + 15, 20, BLACK);
+            }
+            DrawRectangleRec(backToModeBtn2, CheckCollisionPointRec(GetMousePosition(), backToModeBtn2) ? DARKGRAY : GRAY);
+            DrawText("BACK", backToModeBtn2.x + 35, backToModeBtn2.y + 15, 20, WHITE);
+            break;
+
+        case GameState::MULTIPLAYER_READY:
+            DrawText(isRaceMode ? "RACE - READY" : "VERSUS - READY", GetScreenWidth()/2 - 150, 150, 40, DARKBLUE);
+            if (isHost) {
+                DrawText("Press START to begin the game", GetScreenWidth()/2 - 200, 250, 30, DARKGREEN);
+                DrawRectangleRec(startGameBtn, CheckCollisionPointRec(GetMousePosition(), startGameBtn) ? DARKGREEN : GREEN);
+                DrawText("START (S)", startGameBtn.x + 15, startGameBtn.y + 15, 20, BLACK);
+            } else if (isGuest) {
+                DrawText("Waiting for Host to start...", GetScreenWidth()/2 - 180, 250, 30, GRAY);
+            }
+            DrawRectangleRec(backToModeBtn2, CheckCollisionPointRec(GetMousePosition(), backToModeBtn2) ? DARKGRAY : GRAY);
+            DrawText("BACK", backToModeBtn2.x + 35, backToModeBtn2.y + 15, 20, WHITE);
             break;
 
         case GameState::PAUSED:

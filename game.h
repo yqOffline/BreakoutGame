@@ -20,7 +20,11 @@
 using json = nlohmann::json;
 
 enum class GameState {
-    MENU,
+    MODE_SELECT,        // 新增：模式选择
+    SINGLE_MENU,        // 原 MENU，重命名
+    MULTIPLAYER_MENU,   // 双人模式菜单（竞速或对抗）
+    MULTIPLAYER_LOBBY,  // 双人等待界面
+    MULTIPLAYER_READY,  // 双人准备开始界面
     PLAYING,
     PAUSED,
     GAME_OVER,
@@ -32,6 +36,11 @@ enum class GameState {
 enum class PauseCause {
     MANUAL_PAUSE,
     LIFE_LOSS_PAUSE
+};
+
+enum class MultiplayerSubState {
+    LOBBY,      // 选择 Host/Guest
+    READY       // 准备开始
 };
 
 struct RankRecord {
@@ -58,7 +67,21 @@ private:
     float paddleMoveSpeed;
 
     Rectangle redLine;
+    // 模式选择菜单按钮
+    Rectangle singleBtn;
+    Rectangle raceBtn;
+    Rectangle versusBtn;
+    // 单人菜单按钮
     Rectangle startBtn;
+    Rectangle rankBtn;
+    Rectangle eraseRankBtn;
+    Rectangle backToModeBtn;        // 从单人菜单返回模式选择
+    // 双人菜单按钮（竞速/对抗共用）
+    Rectangle hostBtn;
+    Rectangle guestBtn;
+    Rectangle startGameBtn;         // Host 开始游戏按钮
+    Rectangle backToModeBtn2;       // 从双人菜单返回模式选择
+    // 其他原有按钮
     Rectangle continueBtn;
     Rectangle restartBtn;
     Rectangle gameOverRestartBtn;
@@ -66,9 +89,7 @@ private:
     Rectangle goAheadBtn;
     Rectangle victoryRestartBtn;
     Rectangle victoryReplayBtn;
-    Rectangle rankBtn;
-    Rectangle eraseRankBtn;
-    Rectangle backBtn;
+    Rectangle backBtn;              // 排行榜返回按钮
 
     Texture2D backgroundTex;
     Texture2D paddleTex;
@@ -78,12 +99,18 @@ private:
     GameState currentState;
     PauseCause pauseCause;
 
+    // 双人模式相关变量
+    bool isRaceMode;                // true=竞速，false=对抗
+    bool isHost;                    // 当前是否为 Host
+    bool isGuest;                   // 当前是否为 Guest
+    MultiplayerSubState multiSubState; // 双人菜单子状态
+
     std::vector<std::deque<Vector2>> ballTrails;
     ParticleSystem particleSystem;
     std::vector<SkillBall> skillBalls;
     LevelManager levelManager;
 
-    std::vector<std::unique_ptr<Effect>> activeEffects;  // 改为容器
+    std::vector<std::unique_ptr<Effect>> activeEffects;
 
     float originalPaddleWidth;
     float originalBallRadius;
@@ -116,6 +143,9 @@ private:
     std::vector<RankRecord> rankList;
     static const int MAX_RANK_COUNT = 5;
     const std::string rankFileName = "rank.dat";
+
+    bool showEraseHint;
+    float eraseHintTimer;
 
     void ResetBricks();
     void CheckBallHitRedLine();
