@@ -21,7 +21,8 @@ Game::Game(int screenWidth, int screenHeight)
       isHost(false),
       isGuest(false),
       multiSubState(MultiplayerSubState::LOBBY),
-      showEraseHint(false),eraseHintTimer(0.0f)
+      showEraseHint(false),eraseHintTimer(0.0f),
+      exitToRaceLobby(false)
 {
     // 1. 加载配置文件
     std::ifstream f("config.json");
@@ -174,6 +175,7 @@ void Game::ResetGameState() {
     isHost = false;
     isGuest = false;
     multiSubState = MultiplayerSubState::LOBBY;
+    exitToRaceLobby = false;
 }
 
 void Game::ResetGame() {
@@ -276,15 +278,13 @@ void Game::HandleInput(Vector2 mousePos) {
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, singleBtn)) || IsKeyPressed(KEY_ONE)) {
                 currentState = GameState::SINGLE_MENU;
             }
+            // 修改此处：不再进入内部多人菜单，而是设置退出标志
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, raceBtn)) || IsKeyPressed(KEY_TWO)) {
-                isRaceMode = true;
-                currentState = GameState::MULTIPLAYER_MENU;
-                multiSubState = MultiplayerSubState::LOBBY;
+                exitToRaceLobby = true;
+                // 注意：不改变 currentState，等待外层接管
             }
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, versusBtn)) || IsKeyPressed(KEY_THREE)) {
-                isRaceMode = false;
-                currentState = GameState::MULTIPLAYER_MENU;
-                multiSubState = MultiplayerSubState::LOBBY;
+                // VERSUS 暂未实现，可留空或同样设置标志
             }
             break;
 
@@ -913,4 +913,9 @@ void Game::AddVictoryRecord() {
         rankList.resize(MAX_RANK_COUNT);
     }
     SaveRanking();
+}
+
+void Game::StartSinglePlayer() {
+    currentState = GameState::SINGLE_MENU;
+    // 确保其他初始化正确（如重置游戏数据）
 }

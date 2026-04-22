@@ -161,6 +161,8 @@ private:
     void ResetGameState();
     void ClearRanking();
 
+    bool exitToRaceLobby;   // 新增：是否请求退出到竞速Lobby
+
 public:
     Game(int screenWidth, int screenHeight);
     ~Game();
@@ -183,6 +185,10 @@ public:
     
     bool HasEffectOfType(const std::string& typeName) const;
     const std::vector<std::unique_ptr<Effect>>& GetActiveEffects() const { return activeEffects; }
+
+    void StartSinglePlayer();   // 新增：直接进入单机菜单
+    bool ShouldExitToRaceLobby() const { return exitToRaceLobby; }
+    
 };
 
 #endif

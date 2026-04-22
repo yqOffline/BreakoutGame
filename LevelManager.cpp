@@ -119,3 +119,7 @@ std::vector<int> LevelManager::GenerateHealthPool(int totalBricks, const json& h
         
     return pool;
 }
+
+void LevelManager::SetSeed(unsigned int seed) {
+    rng.seed(seed);
+}

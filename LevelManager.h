@@ -43,6 +43,8 @@ public:
     const LevelConfig& GetCurrentConfig() const { return levelConfigs[currentLevelIndex]; }
     int GetCurrentLevelIndex() const { return currentLevelIndex; }
 
+    void SetSeed(unsigned int seed);
+
 private:
     std::vector<LevelConfig> levelConfigs;
     json healthDistribution;
