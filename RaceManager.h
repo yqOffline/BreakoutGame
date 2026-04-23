@@ -69,7 +69,6 @@ private:
     SoundManager soundManager;
 
     bool networkError;
-    std::string errorMessage;
 
     void InitNetwork(bool asHost, const std::string& ip, uint16_t port);
     void SendMessage(const NetMessage& msg, bool reliable = true);

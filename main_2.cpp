@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 
-int main() {
+int main(int argc,char* argv[]) {
     const int baseWidth = 800;
     const int baseHeight = 600;
     
@@ -31,6 +31,10 @@ int main() {
 
     bool raceAsHost = true;
     std::string remoteIP = "127.0.0.1";
+    if (argc > 1) {
+        remoteIP = argv[1];
+        std::cout << "Guest will connect to " << remoteIP << std::endl;
+    }
     uint16_t port = 1234;
 
     // Lobby 按钮布局

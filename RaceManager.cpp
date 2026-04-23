@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cstring>
 #include "rlgl.h"
+
 RaceManager::RaceManager(int baseWidth, int baseHeight, const json& cfg, bool asHost, const std::string& ip, uint16_t port)
     : winWidth(baseWidth * 2), winHeight(baseHeight), gameWidth(baseWidth), gameHeight(baseHeight), config(cfg),
       leftPlayer(gameWidth, gameHeight, config, true),
@@ -16,6 +17,13 @@ RaceManager::RaceManager(int baseWidth, int baseHeight, const json& cfg, bool as
         networkError = true;
         return;
     }
+
+    // 先设置相同种子，再加载关卡
+    pendingSeed = (unsigned int)time(nullptr);
+    leftPlayer.SetRandomSeed(pendingSeed);
+    rightPlayer.SetRandomSeed(pendingSeed);
+    leftPlayer.LoadLevel(0);
+    rightPlayer.LoadLevel(0);
 
     InitNetwork(asHost, ip, port);
 
@@ -40,10 +48,6 @@ void RaceManager::InitNetwork(bool asHost, const std::string& ip, uint16_t port)
             return;
         }
         std::cout << "Host created on port " << port << std::endl;
-
-        pendingSeed = (unsigned int)time(nullptr);
-        leftPlayer.SetRandomSeed(pendingSeed);
-        rightPlayer.SetRandomSeed(pendingSeed);
     } else {
         host = enet_host_create(nullptr, 1, 2, 0, 0);
         if (!host) {
@@ -100,9 +104,11 @@ void RaceManager::ProcessNetworkEvents() {
             case ENET_EVENT_TYPE_DISCONNECT:
                 std::cout << "Peer disconnected!" << std::endl;
                 peer = nullptr;
-                localResult = RaceResult::WIN;
-                gameStarted = false;
-                soundManager.PlayGameVictory();
+                if (localResult == RaceResult::NONE) {
+                    localResult = RaceResult::WIN;
+                    gameStarted = false;
+                    soundManager.PlayGameVictory();
+                }
                 break;
             default: break;
         }
@@ -121,7 +127,7 @@ void RaceManager::HandlePacket(ENetPacket* packet) {
         case NetMsgType::GAME_OVER_NOTIFY: rightPlayer.ForceGameOver(); break;
         case NetMsgType::VICTORY_NOTIFY:   rightPlayer.ForceVictory(); break;
         case NetMsgType::RESULT_NOTIFY:
-            localResult = (msg->data1 == 1) ? RaceResult::WIN : RaceResult::LOSE;
+            localResult = (msg->data1 == 1) ? RaceResult::LOSE : RaceResult::WIN;
             gameStarted = false;
             if (localResult == RaceResult::WIN) soundManager.PlayGameVictory();
             else soundManager.PlayGameOver();
@@ -129,6 +135,8 @@ void RaceManager::HandlePacket(ENetPacket* packet) {
         case NetMsgType::RANDOM_SEED:
             leftPlayer.SetRandomSeed(msg->data1);
             rightPlayer.SetRandomSeed(msg->data1);
+            leftPlayer.LoadLevel(0);
+            rightPlayer.LoadLevel(0);
             break;
         default: break;
     }
@@ -149,41 +157,49 @@ void RaceManager::SetPaused(bool paused) {
 }
 
 void RaceManager::CheckGameEndCondition() {
-    if (networkError) return;
-    bool leftOver = leftPlayer.IsGameOver();
-    bool rightOver = rightPlayer.IsGameOver();
-    bool leftVictory = leftPlayer.IsVictory();
-    bool rightVictory = rightPlayer.IsVictory();
+    if (networkError || role != NetworkRole::HOST) return;
 
-    RaceResult result = RaceResult::NONE;
+    bool leftOver    = leftPlayer.IsGameOver();
+    bool rightOver   = rightPlayer.IsGameOver();
+    bool leftVictory = leftPlayer.IsVictory();
+    bool rightVictory= rightPlayer.IsVictory();
+
+    RaceResult hostResult = RaceResult::NONE;
     NetMessage resultMsg{ NetMsgType::RESULT_NOTIFY, 0, 0, 0.0f };
 
     if (leftOver && !rightOver) {
-        result = RaceResult::LOSE;
+        hostResult = RaceResult::LOSE;
         resultMsg.data1 = 0;
     } else if (rightOver && !leftOver) {
-        result = RaceResult::WIN;
+        hostResult = RaceResult::WIN;
         resultMsg.data1 = 1;
     } else if (leftVictory && rightVictory) {
-        float leftTime = leftPlayer.GetGameTime();
-        float rightTime = rightPlayer.GetGameTime();
-        int leftDeaths = leftPlayer.GetDeaths();
-        int rightDeaths = rightPlayer.GetDeaths();
-
-        if (leftTime < rightTime || (leftTime == rightTime && leftDeaths < rightDeaths)) {
-            result = RaceResult::WIN;
+        float lt = leftPlayer.GetGameTime(), rt = rightPlayer.GetGameTime();
+        int ld = leftPlayer.GetDeaths(), rd = rightPlayer.GetDeaths();
+        if (lt < rt || (lt == rt && ld < rd)) {
+            hostResult = RaceResult::WIN;
             resultMsg.data1 = 1;
         } else {
-            result = RaceResult::LOSE;
+            hostResult = RaceResult::LOSE;
+            resultMsg.data1 = 0;
+        }
+    } else if (leftOver && rightOver) {
+        int ld = leftPlayer.GetDeaths(), rd = rightPlayer.GetDeaths();
+        float lt = leftPlayer.GetGameTime(), rt = rightPlayer.GetGameTime();
+        if (ld < rd || (ld == rd && lt < rt)) {
+            hostResult = RaceResult::WIN;
+            resultMsg.data1 = 1;
+        } else {
+            hostResult = RaceResult::LOSE;
             resultMsg.data1 = 0;
         }
     }
 
-    if (result != RaceResult::NONE) {
-        localResult = result;
+    if (hostResult != RaceResult::NONE && localResult == RaceResult::NONE) {
+        localResult = hostResult;
         gameStarted = false;
         SendMessage(resultMsg);
-        if (result == RaceResult::WIN) soundManager.PlayGameVictory();
+        if (hostResult == RaceResult::WIN) soundManager.PlayGameVictory();
         else soundManager.PlayGameOver();
     }
 }
@@ -194,11 +210,9 @@ void RaceManager::Update(float dt) {
     ProcessNetworkEvents();
 
     if (gameStarted && !gamePaused) {
-        // 双方都更新物理（依赖相同的随机种子和同步的板位置）
         leftPlayer.Update(dt);
         rightPlayer.Update(dt);
 
-        // 发送自己的板位置
         float paddleX = leftPlayer.GetPaddleX();
         NetMessage msg{ NetMsgType::PADDLE_POSITION, 0, 0, paddleX };
         SendMessage(msg, false);
@@ -207,41 +221,58 @@ void RaceManager::Update(float dt) {
             CheckGameEndCondition();
         }
     }
-
-    if (gameStarted && !gamePaused) {
-        leftPlayer.HandleInput();
-    }
 }
 
 void RaceManager::HandleInput() {
     Vector2 mousePos = GetMousePosition();
 
-    if (!gameStarted && IsKeyPressed(KEY_BACKSPACE)) {
-        running = false;
-        return;
-    }
-
-    if (networkError) {
-        if (IsKeyPressed(KEY_BACKSPACE)) {
-            running = false;
-        }
-        return;
-    }
-
-    if (!gameStarted) return;
-
-    if (role == NetworkRole::HOST && IsKeyPressed(KEY_SPACE)) {
-        SetPaused(!gamePaused);
-        NetMessage msg{ gamePaused ? NetMsgType::CONTROL_PAUSE : NetMsgType::CONTROL_RESUME };
-        SendMessage(msg);
-    }
-
+    // ★ 结果界面（最高优先级）
     if (localResult != RaceResult::NONE) {
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)) {
             ResetGame();
         }
+        return;
     }
 
+    // 网络错误时只允许退出
+    if (networkError) {
+        if (IsKeyPressed(KEY_BACKSPACE)) running = false;
+        return;
+    }
+
+    // ───────── LOBBY 阶段 ─────────
+    if (!gameStarted) {
+        // 按 BACKSPACE 退出竞速模式
+        if (IsKeyPressed(KEY_BACKSPACE)) {
+            running = false;
+            return;
+        }
+
+        // Host 且已连接时，可以点击 START 按钮开始游戏
+        if (role == NetworkRole::HOST && peer) {
+            Rectangle startBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 30, 120, 50 };
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) {
+                StartGame();
+                NetMessage msg{ NetMsgType::CONTROL_START };
+                SendMessage(msg);
+                return;
+            }
+        }
+        return;   // Lobby 不处理其他输入
+    }
+
+    // ───────── 游戏进行中 ─────────
+    // 本地挡板移动
+    leftPlayer.HandleInput();
+
+    // 暂停/继续（仅 Host 可通过空格键切换）
+    if (role == NetworkRole::HOST && IsKeyPressed(KEY_SPACE)) {
+        SetPaused(!gamePaused);
+        NetMessage ctrl{ gamePaused ? NetMsgType::CONTROL_PAUSE : NetMsgType::CONTROL_RESUME };
+        SendMessage(ctrl);
+    }
+
+    // 暂停时 Host 的继续按钮（鼠标）
     if (gamePaused && role == NetworkRole::HOST) {
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn)) {
             SetPaused(false);
@@ -256,31 +287,26 @@ void RaceManager::ResetGame() {
     rightPlayer.ResetForNewGame();
     localResult = RaceResult::NONE;
     gameStarted = false;
-    running = false;
+    running = false;   // 退出到 LOBBY
 }
 
 void RaceManager::Draw() {
-    // 清除整个窗口背景
     ClearBackground(RAYWHITE);
 
-    // 绘制左侧玩家（无需平移）
     BeginScissorMode(0, 0, gameWidth, gameHeight);
     leftPlayer.Draw();
     EndScissorMode();
 
-    // 绘制右侧玩家：平移坐标系到右半屏
     BeginScissorMode(gameWidth, 0, gameWidth, gameHeight);
     rlPushMatrix();
-    rlTranslatef(gameWidth, 0, 0);   // 将原点移到右半屏起点
+    rlTranslatef(gameWidth, 0, 0);
     rightPlayer.Draw();
     rlPopMatrix();
     EndScissorMode();
 
-    // 绘制中间分隔线
     DrawLine(gameWidth, 0, gameWidth, winHeight, WHITE);
     DrawLine(gameWidth - 2, 0, gameWidth - 2, winHeight, GRAY);
 
-    // 绘制网络错误界面（全屏，不受 Scissor 影响）
     if (networkError) {
         DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.7f));
         DrawText("NETWORK ERROR", winWidth/2 - 150, winHeight/2 - 30, 40, RED);
@@ -288,16 +314,16 @@ void RaceManager::Draw() {
         return;
     }
 
-    // 绘制 Lobby / Pause / Result 界面
-    if (!gameStarted) {
-        DrawLobby();
-    } else if (gamePaused) {
-        DrawPauseScreen();
-    }
-
+    // 结果界面最高优先级
     if (localResult != RaceResult::NONE) {
         DrawResultScreen();
+        return;
     }
+
+    if (!gameStarted)
+        DrawLobby();
+    else if (gamePaused)
+        DrawPauseScreen();
 }
 
 void RaceManager::DrawLobby() {
@@ -308,18 +334,14 @@ void RaceManager::DrawLobby() {
     } else {
         statusText = peer ? "Connected to host. Waiting for start..." : "Connecting to host... (Press BACKSPACE to cancel)";
     }
-    int textWidth = MeasureText(statusText, 30);
-    DrawText(statusText, winWidth/2 - textWidth/2, winHeight/2 - 15, 30, WHITE);
+    int tw = MeasureText(statusText, 30);
+    DrawText(statusText, winWidth/2 - tw/2, winHeight/2 - 15, 30, WHITE);
 
+    // Host 且已连接时显示 START 按钮（纯绘制，交互在 HandleInput 中）
     if (role == NetworkRole::HOST && peer) {
         Rectangle startBtn = { winWidth/2.0f - 60, winHeight/2.0f + 30, 120, 50 };
         DrawRectangleRec(startBtn, CheckCollisionPointRec(GetMousePosition(), startBtn) ? DARKGREEN : GREEN);
         DrawText("START", startBtn.x + 30, startBtn.y + 15, 20, BLACK);
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(GetMousePosition(), startBtn)) {
-            StartGame();
-            NetMessage msg{ NetMsgType::CONTROL_START };
-            SendMessage(msg);
-        }
     }
 }
 
@@ -338,9 +360,9 @@ void RaceManager::DrawResultScreen() {
     DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.8f));
     const char* text = (localResult == RaceResult::WIN) ? "YOU WIN!" : "YOU LOSE!";
     int fontSize = 70;
-    int textWidth = MeasureText(text, fontSize);
-    Color textColor = (localResult == RaceResult::WIN) ? GOLD : RED;
-    DrawText(text, winWidth/2 - textWidth/2, winHeight/2 - 60, fontSize, textColor);
+    int tw = MeasureText(text, fontSize);
+    Color tc = (localResult == RaceResult::WIN) ? GOLD : RED;
+    DrawText(text, winWidth/2 - tw/2, winHeight/2 - 60, fontSize, tc);
     DrawRectangleRec(restartBtn, CheckCollisionPointRec(GetMousePosition(), restartBtn) ? DARKGREEN : GREEN);
     DrawText("RESTART", restartBtn.x + 20, restartBtn.y + 15, 20, BLACK);
 }
