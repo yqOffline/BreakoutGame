@@ -475,9 +475,9 @@ void Game::Update(float dt) {
     }
 
     if (currentState != GameState::PLAYING) return;
-
+    
     // 后门按键（保持不变）
-    if (IsKeyPressed(KEY_L)) {
+    if (IsKeyPressed(KEY_C)) {
         if (currentLevel == totalLevels - 1) {
             currentState = GameState::VICTORY;
             timerRunning = false;
@@ -489,14 +489,14 @@ void Game::Update(float dt) {
         }
         return;
     }
-    if (IsKeyPressed(KEY_W)) {
+    if (IsKeyPressed(KEY_V)) {
         currentState = GameState::VICTORY;
         timerRunning = false;
         AddVictoryRecord();
         for (auto& b : balls) b.SetSpeed({0, 0});
         return;
     }
-
+    
     // 1. 拖尾记录
     for (size_t i = 0; i < balls.size(); ++i) {
         ballTrails[i].push_back(balls[i].GetPosition());

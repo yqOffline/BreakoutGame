@@ -10,15 +10,18 @@ RaceManager::RaceManager(int baseWidth, int baseHeight, const json& cfg, bool as
       role(asHost ? NetworkRole::HOST : NetworkRole::GUEST),
       running(true), gameStarted(false), gamePaused(false),
       localResult(RaceResult::NONE), host(nullptr), peer(nullptr),
-      remoteIP(ip), remotePort(port), pendingSeed(0), networkError(false)
+      remoteIP(ip), remotePort(port), pendingSeed(0), networkError(false),
+      m_backToLobby(false)
 {
+    bgLeft  = LoadTexture("1.png");
+    bgRight = LoadTexture("3.png");   // 或 2.png，根据你需求
+
     if (enet_initialize() != 0) {
         std::cerr << "Failed to initialize ENet!" << std::endl;
         networkError = true;
         return;
     }
 
-    // 先设置相同种子，再加载关卡
     pendingSeed = (unsigned int)time(nullptr);
     leftPlayer.SetRandomSeed(pendingSeed);
     rightPlayer.SetRandomSeed(pendingSeed);
@@ -32,6 +35,8 @@ RaceManager::RaceManager(int baseWidth, int baseHeight, const json& cfg, bool as
 }
 
 RaceManager::~RaceManager() {
+    UnloadTexture(bgLeft);
+    UnloadTexture(bgRight);
     if (host) enet_host_destroy(host);
     enet_deinitialize();
 }
@@ -206,75 +211,64 @@ void RaceManager::CheckGameEndCondition() {
 
 void RaceManager::Update(float dt) {
     if (!running) return;
-
     ProcessNetworkEvents();
-
     if (gameStarted && !gamePaused) {
         leftPlayer.Update(dt);
         rightPlayer.Update(dt);
-
         float paddleX = leftPlayer.GetPaddleX();
         NetMessage msg{ NetMsgType::PADDLE_POSITION, 0, 0, paddleX };
         SendMessage(msg, false);
-
-        if (role == NetworkRole::HOST) {
-            CheckGameEndCondition();
-        }
+        if (role == NetworkRole::HOST) CheckGameEndCondition();
     }
 }
 
 void RaceManager::HandleInput() {
     Vector2 mousePos = GetMousePosition();
 
-    // ★ 结果界面（最高优先级）
     if (localResult != RaceResult::NONE) {
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)) {
+        if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)) || IsKeyPressed(KEY_R))
             ResetGame();
-        }
         return;
     }
 
-    // 网络错误时只允许退出
     if (networkError) {
-        if (IsKeyPressed(KEY_BACKSPACE)) running = false;
+        if (IsKeyPressed(KEY_B)) running = false;
         return;
     }
 
-    // ───────── LOBBY 阶段 ─────────
     if (!gameStarted) {
-        // 按 BACKSPACE 退出竞速模式
-        if (IsKeyPressed(KEY_BACKSPACE)) {
+        if (IsKeyPressed(KEY_B)) {
+            m_backToLobby = true;
+            running = false;
+            return;
+        }
+        Rectangle backBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 90, 120, 50 };
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtn)) {
+            m_backToLobby = true;
             running = false;
             return;
         }
 
-        // Host 且已连接时，可以点击 START 按钮开始游戏
         if (role == NetworkRole::HOST && peer) {
             Rectangle startBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 30, 120, 50 };
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) {
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) || IsKeyPressed(KEY_S)) {
                 StartGame();
                 NetMessage msg{ NetMsgType::CONTROL_START };
                 SendMessage(msg);
                 return;
             }
         }
-        return;   // Lobby 不处理其他输入
+        return;
     }
 
-    // ───────── 游戏进行中 ─────────
-    // 本地挡板移动
     leftPlayer.HandleInput();
-
-    // 暂停/继续（仅 Host 可通过空格键切换）
     if (role == NetworkRole::HOST && IsKeyPressed(KEY_SPACE)) {
         SetPaused(!gamePaused);
         NetMessage ctrl{ gamePaused ? NetMsgType::CONTROL_PAUSE : NetMsgType::CONTROL_RESUME };
         SendMessage(ctrl);
     }
-
-    // 暂停时 Host 的继续按钮（鼠标）
     if (gamePaused && role == NetworkRole::HOST) {
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn)) {
+        if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn)) || IsKeyPressed(KEY_SPACE)) {
             SetPaused(false);
             NetMessage msg{ NetMsgType::CONTROL_RESUME };
             SendMessage(msg);
@@ -287,17 +281,22 @@ void RaceManager::ResetGame() {
     rightPlayer.ResetForNewGame();
     localResult = RaceResult::NONE;
     gameStarted = false;
-    running = false;   // 退出到 LOBBY
+    running = false;
 }
 
+// ---------- 绘制函数 ----------
 void RaceManager::Draw() {
-    ClearBackground(RAYWHITE);
-
+    // 左半屏背景 + 游戏元素
     BeginScissorMode(0, 0, gameWidth, gameHeight);
+    DrawTexturePro(bgLeft, {0,0,(float)bgLeft.width,(float)bgLeft.height},
+                   {0,0,(float)gameWidth,(float)gameHeight}, {0,0}, 0, WHITE);
     leftPlayer.Draw();
     EndScissorMode();
 
+    // 右半屏背景 + 游戏元素
     BeginScissorMode(gameWidth, 0, gameWidth, gameHeight);
+    DrawTexturePro(bgRight, {0,0,(float)bgRight.width,(float)bgRight.height},
+                   {(float)gameWidth, 0, (float)gameWidth, (float)gameHeight}, {0,0}, 0, WHITE);
     rlPushMatrix();
     rlTranslatef(gameWidth, 0, 0);
     rightPlayer.Draw();
@@ -310,11 +309,10 @@ void RaceManager::Draw() {
     if (networkError) {
         DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.7f));
         DrawText("NETWORK ERROR", winWidth/2 - 150, winHeight/2 - 30, 40, RED);
-        DrawText("Press BACKSPACE to return", winWidth/2 - 180, winHeight/2 + 30, 30, WHITE);
+        DrawText("Press B to return", winWidth/2 - 180, winHeight/2 + 30, 30, WHITE);
         return;
     }
 
-    // 结果界面最高优先级
     if (localResult != RaceResult::NONE) {
         DrawResultScreen();
         return;
@@ -332,25 +330,30 @@ void RaceManager::DrawLobby() {
     if (role == NetworkRole::HOST) {
         statusText = peer ? "Client connected! Press START to begin." : "Waiting for client...";
     } else {
-        statusText = peer ? "Connected to host. Waiting for start..." : "Connecting to host... (Press BACKSPACE to cancel)";
+        statusText = peer ? "Connected to host. Waiting for start..." : "Connecting to host...";
     }
     int tw = MeasureText(statusText, 30);
     DrawText(statusText, winWidth/2 - tw/2, winHeight/2 - 15, 30, WHITE);
 
-    // Host 且已连接时显示 START 按钮（纯绘制，交互在 HandleInput 中）
+    // START 按钮（仅 Host 且已连接）
     if (role == NetworkRole::HOST && peer) {
-        Rectangle startBtn = { winWidth/2.0f - 60, winHeight/2.0f + 30, 120, 50 };
-        DrawRectangleRec(startBtn, CheckCollisionPointRec(GetMousePosition(), startBtn) ? DARKGREEN : GREEN);
-        DrawText("START", startBtn.x + 30, startBtn.y + 15, 20, BLACK);
+        Rectangle startBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 30, 120, 50 };
+        DrawRectangleRec(startBtn, (CheckCollisionPointRec(GetMousePosition(), startBtn) || IsKeyPressed(KEY_S)) ? DARKGREEN : GREEN);
+        DrawText("START (S)", startBtn.x + 10, startBtn.y + 15, 20, BLACK);
     }
+
+    // BACK 按钮（通用）
+    Rectangle backBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 90, 120, 50 };
+    DrawRectangleRec(backBtn, (CheckCollisionPointRec(GetMousePosition(), backBtn) || IsKeyPressed(KEY_B)) ? DARKGRAY : GRAY);
+    DrawText("BACK (B)", backBtn.x + 20, backBtn.y + 15, 20, WHITE);
 }
 
 void RaceManager::DrawPauseScreen() {
     DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.7f));
     DrawText("PAUSED", winWidth/2 - 70, winHeight/2 - 60, 50, WHITE);
     if (role == NetworkRole::HOST) {
-        DrawRectangleRec(continueBtn, CheckCollisionPointRec(GetMousePosition(), continueBtn) ? DARKBLUE : BLUE);
-        DrawText("CONTINUE", continueBtn.x + 20, continueBtn.y + 15, 20, WHITE);
+        DrawRectangleRec(continueBtn, (CheckCollisionPointRec(GetMousePosition(), continueBtn) || IsKeyPressed(KEY_SPACE)) ? DARKBLUE : BLUE);
+        DrawText("CONTINUE (SPACE)", continueBtn.x - 10, continueBtn.y + 15, 20, WHITE);
     } else {
         DrawText("Waiting for host...", winWidth/2 - 120, winHeight/2 + 20, 30, GRAY);
     }
@@ -363,6 +366,6 @@ void RaceManager::DrawResultScreen() {
     int tw = MeasureText(text, fontSize);
     Color tc = (localResult == RaceResult::WIN) ? GOLD : RED;
     DrawText(text, winWidth/2 - tw/2, winHeight/2 - 60, fontSize, tc);
-    DrawRectangleRec(restartBtn, CheckCollisionPointRec(GetMousePosition(), restartBtn) ? DARKGREEN : GREEN);
-    DrawText("RESTART", restartBtn.x + 20, restartBtn.y + 15, 20, BLACK);
+    DrawRectangleRec(restartBtn, (CheckCollisionPointRec(GetMousePosition(), restartBtn) || IsKeyPressed(KEY_R)) ? DARKGREEN : GREEN);
+    DrawText("RESTART (R)", restartBtn.x + 10, restartBtn.y + 15, 20, BLACK);
 }

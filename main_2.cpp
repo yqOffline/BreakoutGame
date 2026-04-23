@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 
-int main(int argc,char* argv[]) {
+int main(int argc, char* argv[]) {
     const int baseWidth = 800;
     const int baseHeight = 600;
     
@@ -29,7 +29,8 @@ int main(int argc,char* argv[]) {
     Game* singleGame = new Game(baseWidth, baseHeight);
     RaceManager* raceManager = nullptr;
 
-    bool raceAsHost = true;
+    // 选中状态：'H' = Host, 'G' = Guest, 0 = 未选择
+    char selectedRole = 0;
     std::string remoteIP = "127.0.0.1";
     if (argc > 1) {
         remoteIP = argv[1];
@@ -60,30 +61,57 @@ int main(int argc,char* argv[]) {
                 delete singleGame;
                 singleGame = nullptr;
                 progState = ProgramState::RACE_LOBBY;
-                raceAsHost = true;
+                selectedRole = 0;   // 重置选中状态
             }
             if (!singleGame) continue;
         }
 
         // ---------- 竞速模式 Lobby ----------
         else if (progState == ProgramState::RACE_LOBBY) {
-            // 处理输入
+            // 键盘输入
+            if (IsKeyPressed(KEY_H)) {
+                selectedRole = (selectedRole == 'H') ? 0 : 'H';
+            }
+            if (IsKeyPressed(KEY_G)) {
+                selectedRole = (selectedRole == 'G') ? 0 : 'G';
+            }
+            if (IsKeyPressed(KEY_B)) {
+                progState = ProgramState::SINGLE_PLAYER;
+                singleGame = new Game(baseWidth, baseHeight);
+                continue;
+            }
+            if (IsKeyPressed(KEY_R)) {
+                // 只有选中角色后才能 READY
+                if (selectedRole != 0) {
+                    SetWindowSize(baseWidth * 2, baseHeight);
+                    bool asHost = (selectedRole == 'H');
+                    raceManager = new RaceManager(baseWidth, baseHeight, config, asHost, remoteIP, port);
+                    progState = ProgramState::RACE_PLAYING;
+                    continue;
+                }
+            }
+
+            // 鼠标输入
             if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
                 if (CheckCollisionPointRec(mousePos, hostBtn)) {
-                    raceAsHost = true;
+                    selectedRole = (selectedRole == 'H') ? 0 : 'H';
                 }
                 else if (CheckCollisionPointRec(mousePos, guestBtn)) {
-                    raceAsHost = false;
+                    selectedRole = (selectedRole == 'G') ? 0 : 'G';
                 }
                 else if (CheckCollisionPointRec(mousePos, readyBtn)) {
-                    // 无论 Host 还是 Guest，点击 READY 都进入竞速游戏状态
-                    SetWindowSize(baseWidth * 2, baseHeight);
-                    raceManager = new RaceManager(baseWidth, baseHeight, config, raceAsHost, remoteIP, port);
-                    progState = ProgramState::RACE_PLAYING;
+                    if (selectedRole != 0) {
+                        SetWindowSize(baseWidth * 2, baseHeight);
+                        bool asHost = (selectedRole == 'H');
+                        raceManager = new RaceManager(baseWidth, baseHeight, config, asHost, remoteIP, port);
+                        progState = ProgramState::RACE_PLAYING;
+                        continue;
+                    }
                 }
                 else if (CheckCollisionPointRec(mousePos, backBtn)) {
                     progState = ProgramState::SINGLE_PLAYER;
                     singleGame = new Game(baseWidth, baseHeight);
+                    continue;
                 }
             }
 
@@ -92,23 +120,27 @@ int main(int argc,char* argv[]) {
             DrawText("RACE MODE - LOBBY", baseWidth/2 - 150, 120, 40, DARKBLUE);
             DrawText("Select role and press READY", baseWidth/2 - 150, 180, 20, DARKGRAY);
 
-            // Host 按钮
-            Color hostColor = raceAsHost ? GREEN : BLUE;
-            DrawRectangleRec(hostBtn, CheckCollisionPointRec(mousePos, hostBtn) ? DARKGREEN : hostColor);
-            DrawText("HOST", hostBtn.x + 35, hostBtn.y + 15, 20, WHITE);
+            // Host 按钮：选中时持续变暗（DARKGREEN），未选中为标准颜色（GREEN），鼠标悬停再加 Fade
+            Color hostColor = (selectedRole == 'H') ? DARKBLUE : BLUE;
+            if (CheckCollisionPointRec(mousePos, hostBtn)) hostColor = Fade(hostColor, 0.7f);
+            DrawRectangleRec(hostBtn, hostColor);
+            DrawText("HOST (H)", hostBtn.x + 20, hostBtn.y + 15, 20, WHITE);
 
-            // Guest 按钮
-            Color guestColor = !raceAsHost ? GREEN : BLUE;
-            DrawRectangleRec(guestBtn, CheckCollisionPointRec(mousePos, guestBtn) ? DARKGREEN : guestColor);
-            DrawText("GUEST", guestBtn.x + 25, guestBtn.y + 15, 20, WHITE);
+            // Guest 按钮：选中时变暗（DARKBLUE），未选中为 BLUE
+            Color guestColor = (selectedRole == 'G') ? DARKBLUE : BLUE;
+            if (CheckCollisionPointRec(mousePos, guestBtn)) guestColor = Fade(guestColor, 0.7f);
+            DrawRectangleRec(guestBtn, guestColor);
+            DrawText("GUEST (G)", guestBtn.x + 15, guestBtn.y + 15, 20, WHITE);
 
-            // READY 按钮（所有人都可见）
-            DrawRectangleRec(readyBtn, CheckCollisionPointRec(mousePos, readyBtn) ? DARKGREEN : GREEN);
-            DrawText("READY", readyBtn.x + 30, readyBtn.y + 15, 20, BLACK);
+            // READY 按钮：如果未选择角色则灰色不可点击，选中后绿色可点击
+            Color readyColor = (selectedRole != 0) ? GREEN : GRAY;
+            if (selectedRole != 0 && CheckCollisionPointRec(mousePos, readyBtn)) readyColor = DARKGREEN;
+            DrawRectangleRec(readyBtn, readyColor);
+            DrawText("READY (R)", readyBtn.x + 30, readyBtn.y + 15, 20, BLACK);
 
             // BACK 按钮
             DrawRectangleRec(backBtn, CheckCollisionPointRec(mousePos, backBtn) ? DARKGRAY : GRAY);
-            DrawText("BACK", backBtn.x + 35, backBtn.y + 15, 20, WHITE);
+            DrawText("BACK (B)", backBtn.x + 35, backBtn.y + 15, 20, WHITE);
 
             DrawText("Host: wait for client, then click START.", baseWidth/2 - 200, 430, 20, DARKGRAY);
             DrawText("Guest: connect to host, wait for start.", baseWidth/2 - 200, 460, 20, DARKGRAY);

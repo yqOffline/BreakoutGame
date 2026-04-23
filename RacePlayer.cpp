@@ -141,8 +141,8 @@ void RacePlayer::HandleInput() {
     if (state != RacePlayerState::PLAYING) return;
 
     float newX = paddle.GetRectangle().x;
-    if (IsKeyDown(KEY_LEFT))  newX -= paddleMoveSpeed;
-    if (IsKeyDown(KEY_RIGHT)) newX += paddleMoveSpeed;
+    if (IsKeyDown(KEY_LEFT)||IsKeyDown(KEY_A))  newX -= paddleMoveSpeed;
+    if (IsKeyDown(KEY_RIGHT)||IsKeyDown(KEY_D)) newX += paddleMoveSpeed;
 
     if (newX < 0) newX = 0;
     float maxX = screenWidth - paddle.GetRectangle().width;

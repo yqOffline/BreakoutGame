@@ -43,6 +43,8 @@ public:
     void Draw();
     void HandleInput();
     bool IsRunning() const { return running; }
+    bool IsGameStarted() const { return gameStarted; }   // 新增，方便外部查询
+    bool ShouldBackToLobby() const { return m_backToLobby; }
 
 private:
     int winWidth, winHeight;
@@ -69,6 +71,11 @@ private:
     SoundManager soundManager;
 
     bool networkError;
+    bool m_backToLobby = false;
+
+    // 背景纹理
+    Texture2D bgLeft;
+    Texture2D bgRight;
 
     void InitNetwork(bool asHost, const std::string& ip, uint16_t port);
     void SendMessage(const NetMessage& msg, bool reliable = true);
@@ -78,6 +85,8 @@ private:
     void SetPaused(bool paused);
     void StartGame();
     void ResetGame();
+
+    // ★ 这三个绘制函数必须声明
     void DrawLobby();
     void DrawPauseScreen();
     void DrawResultScreen();
