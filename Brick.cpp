@@ -13,7 +13,7 @@ void Brick::Draw() {
 }
 
 bool Brick::TakeDamage() {
-    if (!active) return false;
+    if (!active || invincible) return false;  // 无敌直接返回
     health--;
     if (health <= 0) {
         active = false;

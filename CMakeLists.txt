@@ -28,6 +28,8 @@ set(SOURCES
     SoundManager.cpp
     RacePlayer.cpp       # 新增
     RaceManager.cpp      # 新增
+    VersusGame.cpp 
+    VersusManager.cpp 
 )
 
 add_executable(game ${SOURCES})

@@ -285,6 +285,7 @@ void Game::HandleInput(Vector2 mousePos) {
             }
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, versusBtn)) || IsKeyPressed(KEY_THREE)) {
                 // VERSUS 暂未实现，可留空或同样设置标志
+                exitToVersusLobby = true;
             }
             break;
 

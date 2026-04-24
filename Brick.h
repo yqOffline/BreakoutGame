@@ -9,6 +9,7 @@ private:
     int health;          // 当前血量
     int maxHealth;       // 最大血量
     bool active;
+    bool invincible = false;
 public:
     Brick(float x, float y, float w, float h, int hp = 1);
     
@@ -29,6 +30,8 @@ public:
     bool ShouldDropSkill(float chance) const;
 
     void SetRect(Rectangle r) { rect = r; }
+    void SetInvincible(bool inv) { invincible = inv; }
+    bool IsInvincible() const { return invincible; }
 };
 
 #endif

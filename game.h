@@ -188,6 +188,8 @@ public:
 
     void StartSinglePlayer();   // 新增：直接进入单机菜单
     bool ShouldExitToRaceLobby() const { return exitToRaceLobby; }
+    bool exitToVersusLobby = false;
+    bool ShouldExitToVersusLobby() const { return exitToVersusLobby; }
     
 };
 
