@@ -192,9 +192,9 @@ int main(int argc, char* argv[]) {
             }
             if (IsKeyPressed(KEY_R)) {
                 if (selectedRole != 0) {
-                    SetWindowSize(baseWidth * 1.5, baseHeight * 2);   // ★ 调整窗口
+                    SetWindowSize(baseWidth * 1.5, (int)(baseHeight * 1.6));   // ★ 修改高度为 1.6 倍
                     bool asHost = (selectedRole == 'H');
-                    versusManager = new VersusManager(baseWidth * 1.5, baseHeight * 2, config, asHost, remoteIP, port);
+                    versusManager = new VersusManager(baseWidth * 1.5, (int)(baseHeight * 1.6), config, asHost, remoteIP, port);
                     progState = ProgramState::VERSUS_PLAYING;
                     continue;
                 }
@@ -207,9 +207,9 @@ int main(int argc, char* argv[]) {
                     selectedRole = (selectedRole == 'G') ? 0 : 'G';
                 } else if (CheckCollisionPointRec(mousePos, readyBtn)) {
                     if (selectedRole != 0) {
-                        SetWindowSize(baseWidth * 1.5, baseHeight * 2);
+                        SetWindowSize(baseWidth * 1.5, (int)(baseHeight * 1.6));
                         bool asHost = (selectedRole == 'H');
-                        versusManager = new VersusManager(baseWidth * 1.5, baseHeight * 2, config, asHost, remoteIP, port);
+                        versusManager = new VersusManager(baseWidth * 1.5, (int)(baseHeight * 1.6), config, asHost, remoteIP, port);
                         progState = ProgramState::VERSUS_PLAYING;
                         continue;
                     }

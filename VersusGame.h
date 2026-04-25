@@ -1,4 +1,3 @@
-// VersusGame.h
 #ifndef VERSUS_GAME_H
 #define VERSUS_GAME_H
 
@@ -10,16 +9,14 @@
 #include "Particle.h"
 #include "Effect.h"
 #include "SoundManager.h"
+#include "VersusNetMessage.h"
 #include "json.hpp"
 #include <vector>
 #include <deque>
 #include <memory>
 #include <random>
 
-using json = nlohmann::json;   // 必须添加，否则 json 不可用
-
-// 前置声明，避免循环依赖
-struct GameStateSnapshot;
+using json = nlohmann::json;
 
 class VersusGame {
 public:
@@ -35,11 +32,12 @@ public:
 
     GameStateSnapshot GetSnapshot() const;
     void ApplySnapshot(const GameStateSnapshot& snap);
+    void ApplyInterpolatedState(const GameStateSnapshot& prev, const GameStateSnapshot& next, float t);  // 新增：插值更新
 
     void ApplyEffectToPlayer(std::unique_ptr<Effect> effect, bool upper);
     void UpdateEffects(float dt);
+    void UpdateVisuals(float dt);        // 客户机端更新视觉元素（技能球、粒子、拖尾裁剪）
 
-    // 查询
     int GetUpperLives() const { return upperLives; }
     int GetLowerLives() const { return lowerLives; }
     bool IsBallAttached() const { return waitingForLaunch; }
@@ -47,12 +45,17 @@ public:
     bool IsLowerWaitingLaunch() const { return waitingForLaunch && !ballAttachedToUpper; }
     Color GetBallColor() const { return ballColor; }
 
-    // 回调
+    ParticleSystem& GetParticleSystem() { return particleSystem; }
+    void AddSkillBall(const SkillBall& sb) { skillBalls.push_back(sb); }
+
     std::function<void()> OnLifeLost;
     std::function<void(bool)> OnBallLaunched;
     std::function<void(EffectType, bool)> OnEffectApplied;
     std::function<void(EffectType, bool)> OnEffectRemoved;
     std::function<void(const SkillBall&)> OnSkillBallSpawned;
+    std::function<void(Vector2, Color, int, bool)> OnParticleSpawned;
+
+    Vector2 lastSnapshotSpeed;
 
 private:
     int screenWidth, screenHeight;
@@ -72,11 +75,11 @@ private:
     int upperLives, lowerLives;
     bool waitingForLaunch;
     bool ballAttachedToUpper;
+    bool ballOwnedByUpper;               // 记录球当前归属的Paddle
 
     std::vector<std::unique_ptr<Effect>> upperEffects;
     std::vector<std::unique_ptr<Effect>> lowerEffects;
 
-    // 配置
     float paddleMoveSpeed;
     float ballInitSpeedX, ballInitSpeedY;
     float skillBallSpeedY;
@@ -86,10 +89,15 @@ private:
     float particleGravity;
     int maxTrailLength;
 
+    float originalUpperPaddleWidth;
+    float originalLowerPaddleWidth;
+    float originalBallRadius;
+
     SoundManager soundManager;
     std::mt19937 rng;
 
-    // 辅助
+    float m_gameTimer = 0.0f;            // 新增：内部游戏计时器（秒），仅在主机端递增
+
     void HandleBallEdgeBounce();
     void HandlePaddleCollision(Paddle& paddle, bool isUpper);
     void HandleBrickCollision();

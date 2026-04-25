@@ -12,7 +12,8 @@ void SkillBall::Update(float dt) {
     pos.y += sp.y * dt;
     SetPosition(pos);
     
-    if (pos.y > GetScreenHeight() + GetRadius()) {
+    // 增加上方越界检测，避免技能球飞出屏幕永远不消失
+    if (pos.y < -GetRadius() || pos.y > GetScreenHeight() + GetRadius()) {
         active = false;
     }
 }
@@ -25,7 +26,7 @@ void SkillBall::Draw() {
     int cx = (int)center.x;
     int cy = (int)center.y;
     
-    // 光晕效果：使用简单的半透明圆代替渐变（避免兼容问题）
+    // 光晕效果
     DrawCircle(cx, cy, radius * 2.5f, Fade(glowColor, 0.15f));
     DrawCircle(cx, cy, radius * 2.0f, Fade(glowColor, 0.25f));
     DrawCircle(cx, cy, radius * 1.5f, Fade(glowColor, 0.4f));

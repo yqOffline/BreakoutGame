@@ -1,4 +1,3 @@
-// VersusNetMessage.h
 #ifndef VERSUS_NET_MESSAGE_H
 #define VERSUS_NET_MESSAGE_H
 
@@ -14,7 +13,8 @@ enum class VersusMsgType : uint8_t {
     EFFECT_REMOVED,
     SKILLBALL_SPAWN,
     GAME_OVER,
-    CONTROL_START   // 新增：Host 通知 Guest 游戏开始
+    CONTROL_START,
+    PARTICLE_SPAWN
 };
 
 #pragma pack(push, 1)
@@ -26,14 +26,32 @@ struct VersusNetMessage {
     float floatData;
 };
 
+// 技能球生成专用消息（位置、速度Y、类型）
+struct SkillBallSpawnMsg {
+    VersusMsgType type;     // SKILLBALL_SPAWN
+    float posX, posY;
+    float speedY;
+    int32_t skillType;      // SkillType enum 的值
+};
+
+// 粒子生成专用消息（位置、颜色、数量）
+struct ParticleSpawnMsg {
+    VersusMsgType type;     // PARTICLE_SPAWN
+    float posX, posY;
+    uint8_t r, g, b, a;
+    int32_t count;
+    uint8_t isBreak;
+};
+
 struct GameStateSnapshot {
     float ballX, ballY;
     float ballSpeedX, ballSpeedY;
     float upperPaddleX, lowerPaddleX;
     int32_t upperLives, lowerLives;
     uint8_t ballR, ballG, ballB, ballA;
-    uint8_t ballAttached;       // 0=飞行, 1=附上挡板, 2=附下挡板
+    uint8_t ballAttached;
     uint32_t brickActiveBits;
+    float hostGameTime;      // 新增：主机端的游戏时间（秒）
 };
 
 #pragma pack(pop)
