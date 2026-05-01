@@ -15,16 +15,18 @@
 #include <memory>
 #include <string>
 #include <algorithm>
+#include <atomic>
+#include <future>
 
 #include "json.hpp"
 using json = nlohmann::json;
 
 enum class GameState {
-    MODE_SELECT,        // 新增：模式选择
-    SINGLE_MENU,        // 原 MENU，重命名
-    MULTIPLAYER_MENU,   // 双人模式菜单（竞速或对抗）
-    MULTIPLAYER_LOBBY,  // 双人等待界面
-    MULTIPLAYER_READY,  // 双人准备开始界面
+    MODE_SELECT,
+    SINGLE_MENU,
+    MULTIPLAYER_MENU,
+    MULTIPLAYER_LOBBY,
+    MULTIPLAYER_READY,
     PLAYING,
     PAUSED,
     GAME_OVER,
@@ -39,8 +41,22 @@ enum class PauseCause {
 };
 
 enum class MultiplayerSubState {
-    LOBBY,      // 选择 Host/Guest
-    READY       // 准备开始
+    LOBBY,
+    READY
+};
+
+// 异步纹理加载状态（板块一）
+enum class LoadState {
+    IDLE,
+    LOADING,
+    DONE
+};
+
+// 异步关卡加载状态（板块二）
+enum class LevelLoadState {
+    IDLE,
+    LOADING,
+    DONE
 };
 
 struct RankRecord {
@@ -52,6 +68,14 @@ struct RankRecord {
         if (time != other.time) return time < other.time;
         return deaths < other.deaths;
     }
+};
+
+// 异步加载关卡的数据结构（板块二）
+struct LevelLoadData {
+    std::vector<Brick> bricks;
+    float brickWidth;
+    float startX;
+    int levelIndex;
 };
 
 class Game {
@@ -67,21 +91,17 @@ private:
     float paddleMoveSpeed;
 
     Rectangle redLine;
-    // 模式选择菜单按钮
     Rectangle singleBtn;
     Rectangle raceBtn;
     Rectangle versusBtn;
-    // 单人菜单按钮
     Rectangle startBtn;
     Rectangle rankBtn;
     Rectangle eraseRankBtn;
-    Rectangle backToModeBtn;        // 从单人菜单返回模式选择
-    // 双人菜单按钮（竞速/对抗共用）
+    Rectangle backToModeBtn;
     Rectangle hostBtn;
     Rectangle guestBtn;
-    Rectangle startGameBtn;         // Host 开始游戏按钮
-    Rectangle backToModeBtn2;       // 从双人菜单返回模式选择
-    // 其他原有按钮
+    Rectangle startGameBtn;
+    Rectangle backToModeBtn2;
     Rectangle continueBtn;
     Rectangle restartBtn;
     Rectangle gameOverRestartBtn;
@@ -89,7 +109,7 @@ private:
     Rectangle goAheadBtn;
     Rectangle victoryRestartBtn;
     Rectangle victoryReplayBtn;
-    Rectangle backBtn;              // 排行榜返回按钮
+    Rectangle backBtn;
 
     Texture2D backgroundTex;
     Texture2D paddleTex;
@@ -99,11 +119,10 @@ private:
     GameState currentState;
     PauseCause pauseCause;
 
-    // 双人模式相关变量
-    bool isRaceMode;                // true=竞速，false=对抗
-    bool isHost;                    // 当前是否为 Host
-    bool isGuest;                   // 当前是否为 Guest
-    MultiplayerSubState multiSubState; // 双人菜单子状态
+    bool isRaceMode;
+    bool isHost;
+    bool isGuest;
+    MultiplayerSubState multiSubState;
 
     std::vector<std::deque<Vector2>> ballTrails;
     ParticleSystem particleSystem;
@@ -161,7 +180,25 @@ private:
     void ResetGameState();
     void ClearRanking();
 
-    bool exitToRaceLobby;   // 新增：是否请求退出到竞速Lobby
+    bool exitToRaceLobby;
+
+    // ---------- 板块一：异步纹理加载 ----------
+    std::atomic<LoadState> loadState{LoadState::IDLE};
+    std::future<Image> loadFuture;
+    std::string pendingTexturePath;
+    Texture2D loadedTexture{0};
+    bool useLoadedTexture = false;
+    // ---------------------------------------
+
+    // ---------- 板块二：异步关卡加载 ----------
+    LevelLoadState levelLoadState = LevelLoadState::IDLE;
+    std::future<LevelLoadData> levelLoadFuture;
+    int pendingLevelIndex = -1;                     // 即将加载的关卡编号
+    // 异步生成关卡数据的辅助函数（线程安全）
+    LevelLoadData GenerateLevelData(int index) const;
+    // 应用加载完成的关卡数据到游戏世界
+    void ApplyLevelLoadData(const LevelLoadData& data);
+    // -------------------------------------------
 
 public:
     Game(int screenWidth, int screenHeight);
@@ -186,11 +223,10 @@ public:
     bool HasEffectOfType(const std::string& typeName) const;
     const std::vector<std::unique_ptr<Effect>>& GetActiveEffects() const { return activeEffects; }
 
-    void StartSinglePlayer();   // 新增：直接进入单机菜单
+    void StartSinglePlayer();
     bool ShouldExitToRaceLobby() const { return exitToRaceLobby; }
     bool exitToVersusLobby = false;
     bool ShouldExitToVersusLobby() const { return exitToVersusLobby; }
-    
 };
 
 #endif

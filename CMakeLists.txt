@@ -30,6 +30,9 @@ set(SOURCES
     RaceManager.cpp      # 新增
     VersusGame.cpp 
     VersusManager.cpp 
+    TextureCache.cpp
+    NetworkThread.cpp
+    ThreadPool.cpp
 )
 
 add_executable(game ${SOURCES})

@@ -1,233 +1,238 @@
 #include "VersusManager.h"
+#include "TextureCache.h"
 #include "EffectFactory.h"
-#include "VersusNetMessage.h"
 #include <iostream>
 #include <cstring>
+#include <enet/enet.h>          // 只在 .cpp 中包含，不暴露到头文件
 
+// ---------- 序列化辅助 ----------
+template <typename T>
+static std::vector<uint8_t> PackData(const T& obj) {
+    std::vector<uint8_t> vec(sizeof(T));
+    std::memcpy(vec.data(), &obj, sizeof(T));
+    return vec;
+}
+
+template <typename T>
+static T UnpackData(const std::vector<uint8_t>& data) {
+    T obj{};
+    if (data.size() >= sizeof(T))
+        std::memcpy(&obj, data.data(), sizeof(T));
+    return obj;
+}
+
+// ---------- 构造函数 ----------
 VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const std::string& ip, uint16_t port)
     : winWidth(ww), winHeight(wh), config(cfg),
       game(ww, wh, cfg), isHost(asHost), running(true), gameStarted(false), networkError(false),
-      host(nullptr), peer(nullptr), pendingSeed((unsigned int)time(nullptr)), drawResult(false)
+      pendingSeed((unsigned int)time(nullptr)), drawResult(false)
 {
-    background = LoadTexture("1.png");
-    if (enet_initialize() != 0) {
-        std::cerr << "Failed to init ENet" << std::endl;
-        networkError = true;
-        return;
-    }
+    background = TextureCache::Instance().GetTexture("1.png");
 
+    // 游戏回调
     game.OnLifeLost = [this]() { OnLifeLost(); };
     game.OnBallLaunched = [this](bool up) { OnBallLaunched(up); };
     game.OnEffectApplied = [this](EffectType t, bool up) { OnEffectApplied(t, up); };
     game.OnEffectRemoved = [this](EffectType t, bool up) { OnEffectRemoved(t, up); };
 
     game.OnSkillBallSpawned = [this](const SkillBall& sb) {
-        if (!peer) return;
         SkillBallSpawnMsg msg;
         msg.type = VersusMsgType::SKILLBALL_SPAWN;
         msg.posX = sb.GetPosition().x;
         msg.posY = sb.GetPosition().y;
         msg.speedY = sb.GetSpeed().y;
         msg.skillType = (int32_t)sb.skillType;
-        ENetPacket* packet = enet_packet_create(&msg, sizeof(msg), ENET_PACKET_FLAG_UNSEQUENCED);
-        enet_peer_send(peer, 0, packet);
+        SendMessage(PackData(msg), false);
     };
 
     game.OnParticleSpawned = [this](Vector2 pos, Color col, int count, bool isBreak) {
-        if (!peer) return;
         ParticleSpawnMsg pmsg;
         pmsg.type = VersusMsgType::PARTICLE_SPAWN;
-        pmsg.posX = pos.x;
-        pmsg.posY = pos.y;
+        pmsg.posX = pos.x; pmsg.posY = pos.y;
         pmsg.r = col.r; pmsg.g = col.g; pmsg.b = col.b; pmsg.a = col.a;
         pmsg.count = count;
         pmsg.isBreak = isBreak ? 1 : 0;
-        ENetPacket* packet = enet_packet_create(&pmsg, sizeof(pmsg), ENET_PACKET_FLAG_UNSEQUENCED);
-        enet_peer_send(peer, 0, packet);
+        SendMessage(PackData(pmsg), false);
     };
 
     game.LoadLevel(pendingSeed);
-    InitNetwork(asHost, ip, port);
+
+    // 启动网络线程
+    threadRunning = true;
+    quitThread = false;
+    std::string remoteIP = ip;
+
+    networkThread = std::thread([this, asHost, remoteIP, port]() {
+        if (enet_initialize() != 0) {
+            networkError = true;
+            threadRunning = false;
+            return;
+        }
+
+        ENetHost* host = nullptr;
+        ENetPeer* peer = nullptr;
+
+        if (asHost) {
+            ENetAddress addr;
+            addr.host = ENET_HOST_ANY;
+            addr.port = port;
+            host = enet_host_create(&addr, 2, 2, 0, 0);
+            if (!host) { networkError = true; threadRunning = false; return; }
+        } else {
+            host = enet_host_create(nullptr, 1, 2, 0, 0);
+            if (!host) { networkError = true; threadRunning = false; return; }
+            ENetAddress addr;
+            enet_address_set_host(&addr, remoteIP.c_str());
+            addr.port = port;
+            peer = enet_host_connect(host, &addr, 2, 0);
+            if (!peer) { networkError = true; threadRunning = false; return; }
+        }
+
+        while (!quitThread) {
+            ENetEvent event;
+            while (enet_host_service(host, &event, 0) > 0) {
+                switch (event.type) {
+                    case ENET_EVENT_TYPE_CONNECT:
+                        peer = event.peer;
+                        isConnected = true;
+                        if (asHost) {
+                            VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
+                            ENetPacket* pkt = enet_packet_create(&seedMsg, sizeof(seedMsg), ENET_PACKET_FLAG_RELIABLE);
+                            enet_peer_send(peer, 0, pkt);
+                        }
+                        break;
+
+                    case ENET_EVENT_TYPE_RECEIVE: {
+                        std::vector<uint8_t> data(event.packet->dataLength);
+                        std::memcpy(data.data(), event.packet->data, event.packet->dataLength);
+                        incomingQueue.push(std::move(data));
+                        enet_packet_destroy(event.packet);
+                        break;
+                    }
+
+                    case ENET_EVENT_TYPE_DISCONNECT:
+                        peer = nullptr;
+                        isConnected = false;
+                        incomingQueue.push({});   // 空包表示断开
+                        break;
+
+                    default: break;
+                }
+            }
+
+            // 发送队列
+            SendItem item;
+            while (outgoingQueue.try_pop(item)) {
+                if (peer) {
+                    ENetPacket* pkt = enet_packet_create(item.data.data(), item.data.size(),
+                        item.reliable ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED);
+                    enet_peer_send(peer, 0, pkt);
+                }
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        if (host) enet_host_destroy(host);
+        enet_deinitialize();
+        threadRunning = false;
+    });
 
     startBtn = { winWidth/2.0f - 60, winHeight/2.0f + 30, 120, 50 };
     restartBtn = { winWidth/2.0f - 60, winHeight/2.0f + 40, 120, 50 };
     backBtn = { winWidth/2.0f - 60, (float)(winHeight - 80), 120, 50 };
 }
 
+// ---------- 析构 ----------
 VersusManager::~VersusManager() {
-    UnloadTexture(background);
-    if (host) enet_host_destroy(host);
-    enet_deinitialize();
+    quitThread = true;
+    if (networkThread.joinable())
+        networkThread.join();
+
 }
 
-void VersusManager::InitNetwork(bool asHost, const std::string& ip, uint16_t port) {
-    if (asHost) {
-        ENetAddress addr;
-        addr.host = ENET_HOST_ANY;
-        addr.port = port;
-        host = enet_host_create(&addr, 2, 2, 0, 0);
-        if (!host) { networkError = true; return; }
-        std::cout << "VERSUS Host on port " << port << std::endl;
-    } else {
-        host = enet_host_create(nullptr, 1, 2, 0, 0);
-        if (!host) { networkError = true; return; }
-        ENetAddress addr;
-        enet_address_set_host(&addr, ip.c_str());
-        addr.port = port;
-        peer = enet_host_connect(host, &addr, 2, 0);
-        if (!peer) { networkError = true; return; }
-
-        ENetEvent event;
-        if (enet_host_service(host, &event, 3000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT) {
-            peer = event.peer;
-            std::cout << "Connected to host" << std::endl;
-        } else {
-            networkError = true;
-        }
-    }
-}
-
-void VersusManager::SendMessage(const VersusNetMessage& msg, bool reliable) {
-    if (!peer) return;
-    ENetPacket* packet = enet_packet_create(&msg, sizeof(msg),
-         reliable ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED);
-    enet_peer_send(peer, 0, packet);
+// ---------- 发送消息（主线程安全） ----------
+void VersusManager::SendMessage(const std::vector<uint8_t>& data, bool reliable) {
+    if (!isConnected) return;
+    outgoingQueue.push({data, reliable});
 }
 
 void VersusManager::SendGameState() {
     GameStateSnapshot snap = game.GetSnapshot();
-    // 丢包模拟（仅Host端生效）
     if (isHost && simulatePacketLoss) {
         float roll = (float)(GetRandomValue(0, 1000)) / 1000.0f;
-        if (roll < packetLossRate)
-            return;   // 模拟丢包，不发送
+        if (roll < packetLossRate) return;
     }
-    ENetPacket* packet = enet_packet_create(&snap, sizeof(snap), ENET_PACKET_FLAG_UNSEQUENCED);
-    if (peer) enet_peer_send(peer, 0, packet);
+    SendMessage(PackData(snap), false);
 }
 
-void VersusManager::ProcessNetworkEvents() {
-    if (networkError) return;
-    ENetEvent event;
-    while (enet_host_service(host, &event, 0) > 0) {
-        switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT:
-                peer = event.peer;
-                if (isHost) {
-                    VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
-                    SendMessage(seedMsg);
-                }
-                break;
-            case ENET_EVENT_TYPE_RECEIVE:
-                HandlePacket(event.packet);
-                enet_packet_destroy(event.packet);
-                break;
-            case ENET_EVENT_TYPE_DISCONNECT:
-                peer = nullptr;
-                if (!drawResult) {
-                    drawResult = true;
-                    resultText = isHost ? "YOU WIN! OPPONENT LEFT" : "CONNECTION LOST";
-                }
-                break;
-            default: break;
+// ---------- 主线程处理接收消息 ----------
+void VersusManager::ProcessIncomingMessages() {
+    std::vector<uint8_t> data;
+    while (incomingQueue.try_pop(data)) {
+        if (data.empty()) {
+            // 断开连接信号
+            if (!drawResult) {
+                drawResult = true;
+                resultText = isHost ? "YOU WIN! OPPONENT LEFT" : "CONNECTION LOST";
+            }
+            isConnected = false;
+            continue;
         }
+        HandleIncomingPacket(data);
     }
 }
 
-void VersusManager::AddSnapshotToBuffer(const GameStateSnapshot& snap) {
-    // 插入快照并保持时间戳递增
-    if (!snapshotBuffer.empty() && snap.hostGameTime <= snapshotBuffer.back().hostGameTime)
-        return; // 忽略乱序或重复
-    snapshotBuffer.push_back(snap);
-
-    // 保持缓冲区大小（仅保留最近6帧，可根据实际情况调整）
-    while (snapshotBuffer.size() > 6)
-        snapshotBuffer.pop_front();
-    
-    if (snap.hostGameTime > latestHostTime)
-        latestHostTime = snap.hostGameTime;
-}
-
-void VersusManager::ApplyInterpolation(float renderTime) {
-    // 如果缓冲区中没有足够数据，则直接使用最新快照（无插值）
-    if (snapshotBuffer.size() < 2) {
-        if (!snapshotBuffer.empty())
-            game.ApplySnapshot(snapshotBuffer.back());
-        return;
-    }
-
-    // 查找两个相邻快照，满足 prev.timestamp <= renderTime <= next.timestamp
-    const GameStateSnapshot* prev = nullptr;
-    const GameStateSnapshot* next = nullptr;
-    for (size_t i = 0; i < snapshotBuffer.size() - 1; ++i) {
-        if (snapshotBuffer[i].hostGameTime <= renderTime &&
-            snapshotBuffer[i+1].hostGameTime >= renderTime) {
-            prev = &snapshotBuffer[i];
-            next = &snapshotBuffer[i+1];
-            break;
-        }
-    }
-
-    if (!prev || !next) {
-        // 如果找不到合适的区间（比如 renderTime 超前或滞后），则使用最新快照
-        game.ApplySnapshot(snapshotBuffer.back());
-        return;
-    }
-
-    float delta = next->hostGameTime - prev->hostGameTime;
-    float t = 0.0f;
-    if (delta > 0.0001f) {
-        t = (renderTime - prev->hostGameTime) / delta;
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
-    }
-    game.ApplyInterpolatedState(*prev, *next, t);
-}
-
-void VersusManager::HandlePacket(ENetPacket* packet) {
-    if (packet->dataLength == sizeof(GameStateSnapshot)) {
+// ---------- 解析并处理收到的数据包 ----------
+void VersusManager::HandleIncomingPacket(const std::vector<uint8_t>& data) {
+    if (data.size() == sizeof(GameStateSnapshot)) {
         if (!isHost) {
-            GameStateSnapshot* snap = (GameStateSnapshot*)packet->data;
-            AddSnapshotToBuffer(*snap);   // 存入缓冲区，不再直接 ApplySnapshot
+            GameStateSnapshot snap = UnpackData<GameStateSnapshot>(data);
+            AddSnapshotToBuffer(snap);
         }
         return;
     }
-    if (packet->dataLength == sizeof(SkillBallSpawnMsg)) {
-        SkillBallSpawnMsg* smsg = (SkillBallSpawnMsg*)packet->data;
-        if (smsg->type == VersusMsgType::SKILLBALL_SPAWN) {
-            SkillType type = static_cast<SkillType>(smsg->skillType);
-            Vector2 pos = { smsg->posX, smsg->posY };
-            Vector2 velocity = { 0.0f, smsg->speedY };
+    if (data.size() == sizeof(SkillBallSpawnMsg)) {
+        SkillBallSpawnMsg smsg = UnpackData<SkillBallSpawnMsg>(data);
+        if (smsg.type == VersusMsgType::SKILLBALL_SPAWN) {
+            SkillType type = static_cast<SkillType>(smsg.skillType);
+            Vector2 pos = { smsg.posX, smsg.posY };
+            Vector2 velocity = { 0.0f, smsg.speedY };
             float radius = config["skill_ball"]["radius"].get<float>();
-            Color glow = (type == SkillType::PADDLE_EXTEND) ? BLUE :
-                         (type == SkillType::BALL_ENLARGE) ? GREEN :
-                         (type == SkillType::BALL_SHRINK) ? RED :
-                         (type == SkillType::EXPLOSION) ? ORANGE :
-                         (type == SkillType::INVINCIBLE) ? GOLD : SKYBLUE;
+            Color glow;
+            switch (type) {
+                case SkillType::PADDLE_EXTEND: glow = BLUE; break;
+                case SkillType::BALL_ENLARGE:  glow = GREEN; break;
+                case SkillType::BALL_SHRINK:   glow = RED; break;
+                case SkillType::EXPLOSION:     glow = ORANGE; break;
+                case SkillType::INVINCIBLE:    glow = GOLD; break;
+                case SkillType::SPLIT:         glow = SKYBLUE; break;
+                default: glow = WHITE; break;
+            }
             SkillBall sb(pos, type, radius, velocity, glow);
             game.AddSkillBall(sb);
         }
         return;
     }
-    if (packet->dataLength == sizeof(ParticleSpawnMsg)) {
-        ParticleSpawnMsg* pmsg = (ParticleSpawnMsg*)packet->data;
-        if (pmsg->type == VersusMsgType::PARTICLE_SPAWN) {
-            Vector2 pos = { pmsg->posX, pmsg->posY };
-            Color col = { pmsg->r, pmsg->g, pmsg->b, pmsg->a };
-            game.GetParticleSystem().EmitExplosion(pos, col, pmsg->count);
+    if (data.size() == sizeof(ParticleSpawnMsg)) {
+        ParticleSpawnMsg pmsg = UnpackData<ParticleSpawnMsg>(data);
+        if (pmsg.type == VersusMsgType::PARTICLE_SPAWN) {
+            Vector2 pos = { pmsg.posX, pmsg.posY };
+            Color col = { pmsg.r, pmsg.g, pmsg.b, pmsg.a };
+            game.GetParticleSystem().EmitExplosion(pos, col, pmsg.count);
         }
         return;
     }
-    if (packet->dataLength != sizeof(VersusNetMessage)) return;
-    VersusNetMessage* msg = (VersusNetMessage*)packet->data;
+    if (data.size() != sizeof(VersusNetMessage)) return;
+    VersusNetMessage msg = UnpackData<VersusNetMessage>(data);
 
-    switch (msg->type) {
+    switch (msg.type) {
         case VersusMsgType::SEED:
-            if (!isHost) game.LoadLevel((unsigned int)msg->data1);
+            if (!isHost) game.LoadLevel((unsigned int)msg.data1);
             break;
         case VersusMsgType::INPUT: {
-            int dir = msg->data1;
-            bool launch = (msg->data2 != 0);
+            int dir = msg.data1;
+            bool launch = (msg.data2 != 0);
             if (isHost) {
                 game.MovePaddle(false, dir);
                 if (launch) game.TryLaunchBall(false);
@@ -238,15 +243,15 @@ void VersusManager::HandlePacket(ENetPacket* packet) {
             if (!isHost) gameStarted = true;
             break;
         case VersusMsgType::EFFECT_APPLIED: {
-            EffectType etype = (EffectType)msg->data1;
-            bool upper = (msg->data2 != 0);
+            EffectType etype = (EffectType)msg.data1;
+            bool upper = (msg.data2 != 0);
             auto effect = EffectFactory::CreateEffect(static_cast<SkillType>(etype));
             if (effect) game.ApplyEffectToPlayer(std::move(effect), upper);
             break;
         }
         case VersusMsgType::GAME_OVER: {
             drawResult = true;
-            resultText = (msg->data1 == 1) ? "YOU LOSE!" : "YOU WIN!";
+            resultText = (msg.data1 == 1) ? "YOU LOSE!" : "YOU WIN!";
             gameStarted = false;
             break;
         }
@@ -254,9 +259,10 @@ void VersusManager::HandlePacket(ENetPacket* packet) {
     }
 }
 
+// ---------- Update ----------
 void VersusManager::Update(float dt) {
     if (!running || networkError) return;
-    ProcessNetworkEvents();
+    ProcessIncomingMessages();
     if (gameStarted) {
         if (isHost) {
             game.Update(dt);
@@ -264,38 +270,35 @@ void VersusManager::Update(float dt) {
             if (game.GetUpperLives() <= 0 || game.GetLowerLives() <= 0) {
                 drawResult = true;
                 int winner = (game.GetUpperLives() <= 0) ? 0 : 1;
-                int hostWin = (isHost && winner == 1) || (!isHost && winner == 0) ? 1 : 0;
+                int hostWin = (winner == 1) ? 1 : 0;   // 1=upper赢？根据角色调整
                 VersusNetMessage msg{ VersusMsgType::GAME_OVER, hostWin, 0, 0 };
-                SendMessage(msg);
+                SendMessage(PackData(msg));
                 resultText = hostWin ? "YOU WIN!" : "YOU LOSE!";
                 gameStarted = false;
             }
         } else {
-            // Guest 端：插值更新视觉
+            // Guest 端：更新效果和视觉
             game.UpdateEffects(dt);
             game.UpdateVisuals(dt);
 
-            // 计算目标渲染时间 = 最新主机时间 - 插值延迟
             float renderTime = latestHostTime - interpolationDelay;
             ApplyInterpolation(renderTime);
         }
     }
 }
 
+// ---------- HandleInput ----------
 void VersusManager::HandleInput() {
-    // ---------- 丢包模拟控制（仅 Host 端有效） ----------
+    // 丢包模拟开关
     if (isHost && IsKeyPressed(KEY_K)) {
         simulatePacketLoss = !simulatePacketLoss;
-        std::cout << "Packet loss simulation: " << (simulatePacketLoss ? "ON" : "OFF") << std::endl;
     }
     if (isHost && IsKeyPressed(KEY_L)) {
-        // 循环切换丢包率：0% -> 30% -> 50% -> 70% -> 100% -> 0%
-        if (packetLossRate < 0.15f)        packetLossRate = 0.3f;
-        else if (packetLossRate < 0.4f)    packetLossRate = 0.5f;
-        else if (packetLossRate < 0.6f)    packetLossRate = 0.7f;
-        else if (packetLossRate < 0.9f)    packetLossRate = 1.0f;
-        else                               packetLossRate = 0.0f;
-        std::cout << "Packet loss rate: " << packetLossRate * 100 << "%" << std::endl;
+        if (packetLossRate < 0.15f)      packetLossRate = 0.3f;
+        else if (packetLossRate < 0.4f)  packetLossRate = 0.5f;
+        else if (packetLossRate < 0.6f)  packetLossRate = 0.7f;
+        else if (packetLossRate < 0.9f)  packetLossRate = 1.0f;
+        else                             packetLossRate = 0.0f;
     }
 
     if (drawResult) {
@@ -304,55 +307,51 @@ void VersusManager::HandleInput() {
             drawResult = false;
             pendingSeed = (unsigned int)time(nullptr);
             game.LoadLevel(pendingSeed);
-            snapshotBuffer.clear();   // 清空插值缓冲区
+            snapshotBuffer.clear();
             latestHostTime = 0.0f;
             if (isHost) {
                 VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
-                SendMessage(seedMsg);
+                SendMessage(PackData(seedMsg));
             }
         }
-        if (IsKeyPressed(KEY_B)) {
-            running = false;
-        }
+        if (IsKeyPressed(KEY_B)) running = false;
         return;
     }
 
     if (!gameStarted) {
-        if (isHost && peer) {
+        if (isHost && isConnected) {
             if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE)) {
                 gameStarted = true;
-                VersusNetMessage startMsg{ VersusMsgType::CONTROL_START, 0, 0, 0 };
-                SendMessage(startMsg);
+                VersusNetMessage startMsg{ VersusMsgType::CONTROL_START };
+                SendMessage(PackData(startMsg));
             }
         }
-        if (IsKeyPressed(KEY_B)) {
-            running = false;
-        }
+        if (IsKeyPressed(KEY_B)) running = false;
         return;
     }
 
-    bool isUpper = isHost;
+    bool upper = isHost;
     int dir = 0;
     if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  dir = -1;
     else if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) dir = 1;
     bool launch = IsKeyPressed(KEY_SPACE) && game.IsBallAttached() &&
-                   ((isUpper && game.IsUpperWaitingLaunch()) || (!isUpper && game.IsLowerWaitingLaunch()));
+                  ((upper && game.IsUpperWaitingLaunch()) || (!upper && game.IsLowerWaitingLaunch()));
 
     if (isHost) {
-        game.MovePaddle(isUpper, dir);
-        if (launch) game.TryLaunchBall(isUpper);
+        game.MovePaddle(upper, dir);
+        if (launch) game.TryLaunchBall(upper);
     } else {
         VersusNetMessage inputMsg{ VersusMsgType::INPUT, dir, launch ? 1 : 0, 0 };
-        SendMessage(inputMsg, false);
+        SendMessage(PackData(inputMsg), false);
     }
 }
 
+// ---------- Draw ----------
 void VersusManager::Draw() {
     DrawTexturePro(background, {0,0,(float)background.width,(float)background.height},
-                   {0,0,(float)winWidth,(float)winHeight}, {0,0}, 0, WHITE);    
+                   {0,0,(float)winWidth,(float)winHeight}, {0,0}, 0, WHITE);
     game.Draw();
 
-    // 显示丢包/插值状态信息
     if (isHost && simulatePacketLoss) {
         DrawText(TextFormat("PACKET LOSS: %d%%", (int)(packetLossRate * 100)), 10, winHeight - 50, 20, RED);
     }
@@ -365,13 +364,13 @@ void VersusManager::Draw() {
         DrawRectangle(0, winHeight/2 - 50, winWidth, 80, Fade(BLACK, 0.4f));
         const char* status;
         if (isHost) {
-            status = peer ? "Press S to start" : "Waiting for opponent...";
+            status = (isConnected && threadRunning) ? "Press S to start" : "Waiting for opponent...";
         } else {
-            status = peer ? "WAIT HOST TO START" : "Connecting to host...";
+            status = (isConnected && threadRunning) ? "WAIT HOST TO START" : "Connecting to host...";
         }
         int tw = MeasureText(status, 30);
         DrawText(status, winWidth/2 - tw/2, winHeight/2 - 35, 30, WHITE);
-        if (isHost && peer) {
+        if (isHost && isConnected && threadRunning) {
             DrawRectangleRec(startBtn, GREEN);
             DrawText("START (S)", startBtn.x + 15, startBtn.y + 15, 20, BLACK);
         }
@@ -391,16 +390,57 @@ void VersusManager::Draw() {
     }
 }
 
-void VersusManager::OnLifeLost() { }
+// ---------- 回调 ----------
+void VersusManager::OnLifeLost() {}
 void VersusManager::OnBallLaunched(bool isUpper) {
     VersusNetMessage msg{ VersusMsgType::BALL_LAUNCHED, isUpper ? 1 : 0, 0, 0 };
-    SendMessage(msg);
+    SendMessage(PackData(msg));
 }
 void VersusManager::OnEffectApplied(EffectType type, bool upper) {
     VersusNetMessage msg{ VersusMsgType::EFFECT_APPLIED, (int32_t)type, upper ? 1 : 0, 0 };
-    SendMessage(msg);
+    SendMessage(PackData(msg));
 }
 void VersusManager::OnEffectRemoved(EffectType type, bool upper) {
     VersusNetMessage msg{ VersusMsgType::EFFECT_REMOVED, (int32_t)type, upper ? 1 : 0, 0 };
-    SendMessage(msg);
+    SendMessage(PackData(msg));
+}
+
+// ---------- 插值相关（不变） ----------
+void VersusManager::AddSnapshotToBuffer(const GameStateSnapshot& snap) {
+    if (!snapshotBuffer.empty() && snap.hostGameTime <= snapshotBuffer.back().hostGameTime)
+        return;
+    snapshotBuffer.push_back(snap);
+    while (snapshotBuffer.size() > 6)
+        snapshotBuffer.pop_front();
+    if (snap.hostGameTime > latestHostTime)
+        latestHostTime = snap.hostGameTime;
+}
+
+void VersusManager::ApplyInterpolation(float renderTime) {
+    if (snapshotBuffer.size() < 2) {
+        if (!snapshotBuffer.empty())
+            game.ApplySnapshot(snapshotBuffer.back());
+        return;
+    }
+    const GameStateSnapshot* prev = nullptr;
+    const GameStateSnapshot* next = nullptr;
+    for (size_t i = 0; i < snapshotBuffer.size() - 1; ++i) {
+        if (snapshotBuffer[i].hostGameTime <= renderTime && snapshotBuffer[i+1].hostGameTime >= renderTime) {
+            prev = &snapshotBuffer[i];
+            next = &snapshotBuffer[i+1];
+            break;
+        }
+    }
+    if (!prev || !next) {
+        game.ApplySnapshot(snapshotBuffer.back());
+        return;
+    }
+    float delta = next->hostGameTime - prev->hostGameTime;
+    float t = 0.0f;
+    if (delta > 0.0001f) {
+        t = (renderTime - prev->hostGameTime) / delta;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+    }
+    game.ApplyInterpolatedState(*prev, *next, t);
 }

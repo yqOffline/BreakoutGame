@@ -5,13 +5,21 @@
 #include "VersusGame.h"
 #include "VersusNetMessage.h"
 #include "SoundManager.h"
+#include "ThreadSafeQueue.h"          // 先前提供的线程安全队列
 #include "json.hpp"
-#include <enet/enet.h>
+#include <thread>
+#include <atomic>
+#include <vector>
 #include <string>
-#include <functional>
 #include <deque>
 
 using json = nlohmann::json;
+
+// 发送队列项
+struct SendItem {
+    std::vector<uint8_t> data;
+    bool reliable;
+};
 
 class VersusManager {
 public:
@@ -28,52 +36,53 @@ private:
     int winWidth, winHeight;
     json config;
 
-    VersusGame game;               // 游戏实例
+    VersusGame game;
     bool isHost;
     bool running;
     bool gameStarted;
     bool networkError;
 
-    ENetHost* host;
-    ENetPeer* peer;
+    // 网络线程
+    std::thread networkThread;
+    std::atomic<bool> threadRunning{false};
+    std::atomic<bool> quitThread{false};
+    std::atomic<bool> isConnected{false};   // 主线程用于判断连接状态
+
+    // 线程安全队列
+    ThreadSafeQueue<std::vector<uint8_t>> incomingQueue;
+    ThreadSafeQueue<SendItem> outgoingQueue;
 
     SoundManager soundManager;
 
-    // 网络相关
-    void InitNetwork(bool asHost, const std::string& ip, uint16_t port);
-    void SendMessage(const VersusNetMessage& msg, bool reliable = true);
+    void SendMessage(const std::vector<uint8_t>& data, bool reliable = true);
     void SendGameState();
-    void ProcessNetworkEvents();
-    void HandlePacket(ENetPacket* packet);
+    void ProcessIncomingMessages();
+    void HandleIncomingPacket(const std::vector<uint8_t>& data);
 
-    // 游戏事件回调
     void OnLifeLost();
     void OnBallLaunched(bool isUpper);
     void OnEffectApplied(EffectType type, bool upper);
     void OnEffectRemoved(EffectType type, bool upper);
-    void OnSkillBallSpawned(const SkillBall& sb);
 
-    // 状态
     unsigned int pendingSeed;
     bool drawResult;
     std::string resultText;
 
-    // UI 按钮
     Rectangle startBtn;
     Rectangle restartBtn;
     Rectangle backBtn;
 
     Texture2D background;
 
-    // ========== 新增：丢包模拟与插值 ==========
-    bool simulatePacketLoss = false;           // 是否启用丢包模拟（仅Host端有效）
-    float packetLossRate = 0.3f;               // 丢包率 (0.0~1.0)
-    std::deque<GameStateSnapshot> snapshotBuffer; // 客户端插值缓冲区
-    float interpolationDelay = 0.1f;           // 插值延迟（秒）
-    float latestHostTime = 0.0f;               // 最新收到的主机时间
+    // 丢包模拟与插值
+    bool simulatePacketLoss = false;
+    float packetLossRate = 0.3f;
+    std::deque<GameStateSnapshot> snapshotBuffer;
+    float interpolationDelay = 0.1f;
+    float latestHostTime = 0.0f;
 
-    void AddSnapshotToBuffer(const GameStateSnapshot& snap);   // 将快照加入缓冲区
-    void ApplyInterpolation(float renderTime);                 // 根据目标渲染时间插值
+    void AddSnapshotToBuffer(const GameStateSnapshot& snap);
+    void ApplyInterpolation(float renderTime);
 };
 
 #endif
