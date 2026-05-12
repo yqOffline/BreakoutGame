@@ -10,6 +10,8 @@
 #include "LevelManager.h"
 #include "Effect.h"
 #include "SoundManager.h"
+#include "Grid.h"
+#include "TrailBuffer.h"
 #include <deque>
 #include <vector>
 #include <memory>
@@ -45,14 +47,12 @@ enum class MultiplayerSubState {
     READY
 };
 
-// 异步纹理加载状态（板块一）
 enum class LoadState {
     IDLE,
     LOADING,
     DONE
 };
 
-// 异步关卡加载状态（板块二）
 enum class LevelLoadState {
     IDLE,
     LOADING,
@@ -70,14 +70,12 @@ struct RankRecord {
     }
 };
 
-// 异步加载关卡的数据结构（板块二）
 struct LevelLoadData {
     std::vector<Brick> bricks;
     float brickWidth;
     float startX;
     int levelIndex;
 };
-
 class Game {
 private:
     json config;
@@ -85,71 +83,46 @@ private:
     std::vector<Ball> balls;
     Paddle paddle;
     std::vector<Brick> bricks;
+    
+    Grid brickGrid;                // ★ 网格
 
     int score;
     int hearts;
     float paddleMoveSpeed;
 
     Rectangle redLine;
-    Rectangle singleBtn;
-    Rectangle raceBtn;
-    Rectangle versusBtn;
-    Rectangle startBtn;
-    Rectangle rankBtn;
-    Rectangle eraseRankBtn;
-    Rectangle backToModeBtn;
-    Rectangle hostBtn;
-    Rectangle guestBtn;
-    Rectangle startGameBtn;
-    Rectangle backToModeBtn2;
-    Rectangle continueBtn;
-    Rectangle restartBtn;
-    Rectangle gameOverRestartBtn;
-    Rectangle replayBtn;
-    Rectangle goAheadBtn;
-    Rectangle victoryRestartBtn;
-    Rectangle victoryReplayBtn;
-    Rectangle backBtn;
+    Rectangle singleBtn, raceBtn, versusBtn, startBtn, rankBtn, eraseRankBtn;
+    Rectangle backToModeBtn, hostBtn, guestBtn, startGameBtn, backToModeBtn2;
+    Rectangle continueBtn, restartBtn, gameOverRestartBtn, replayBtn, goAheadBtn;
+    Rectangle victoryRestartBtn, victoryReplayBtn, backBtn;
 
-    Texture2D backgroundTex;
-    Texture2D paddleTex;
-    bool bgLoaded;
-    bool paddleLoaded;
+    Texture2D backgroundTex, paddleTex;
+    bool bgLoaded, paddleLoaded;
 
     GameState currentState;
     PauseCause pauseCause;
 
-    bool isRaceMode;
-    bool isHost;
-    bool isGuest;
+    bool isRaceMode, isHost, isGuest;
     MultiplayerSubState multiSubState;
 
-    std::vector<std::deque<Vector2>> ballTrails;
+    std::vector<TrailBuffer> ballTrails;
     ParticleSystem particleSystem;
     std::vector<SkillBall> skillBalls;
     LevelManager levelManager;
 
     std::vector<std::unique_ptr<Effect>> activeEffects;
 
-    float originalPaddleWidth;
-    float originalBallRadius;
-
-    float skillDropChance;
-    float skillBallSpeedY;
-    float skillBallRadius;
-
+    float originalPaddleWidth, originalBallRadius;
+    float skillDropChance, skillBallSpeedY, skillBallRadius;
     int particlesPerBrick;
     float particleGravity;
-
     int maxTrailLength;
 
-    int currentLevel = 0;
-    int totalLevels = 0;
+    int currentLevel = 0, totalLevels = 0;
 
     bool lastBrickAnimating = false;
     int lastBrickIndex = -1;
-    Rectangle lastBrickStartRect;
-    Rectangle lastBrickTargetRect;
+    Rectangle lastBrickStartRect, lastBrickTargetRect;
     float lastBrickAnimTimer = 0.0f;
     const float lastBrickAnimDuration = 1.0f;
 
@@ -182,47 +155,47 @@ private:
 
     bool exitToRaceLobby;
 
-    // ---------- 板块一：异步纹理加载 ----------
+    // 异步加载
     std::atomic<LoadState> loadState{LoadState::IDLE};
     std::future<Image> loadFuture;
     std::string pendingTexturePath;
     Texture2D loadedTexture{0};
     bool useLoadedTexture = false;
-    // ---------------------------------------
 
-    // ---------- 板块二：异步关卡加载 ----------
     LevelLoadState levelLoadState = LevelLoadState::IDLE;
     std::future<LevelLoadData> levelLoadFuture;
-    int pendingLevelIndex = -1;                     // 即将加载的关卡编号
-    // 异步生成关卡数据的辅助函数（线程安全）
+    int pendingLevelIndex = -1;
     LevelLoadData GenerateLevelData(int index) const;
-    // 应用加载完成的关卡数据到游戏世界
     void ApplyLevelLoadData(const LevelLoadData& data);
-    // -------------------------------------------
+
+    // 性能测量
+    double m_physicsTime = 0.0;
+    double m_collisionTime = 0.0;
+    double m_skillParticleTime = 0.0;
+    double m_effectsTime = 0.0;
+    double m_otherTime = 0.0;
+    double m_totalTime = 0.0;
+
+    int activeBrickCount = 0;
 
 public:
     Game(int screenWidth, int screenHeight);
     ~Game();
     void ResetGame();
-
     void HandleInput(Vector2 mousePos);
     void Update(float dt);
     void Draw();
-
     bool IsGameRunning() const;
     GameState GetState() const { return currentState; }
     int GetHearts() const { return hearts; }
     void SimulateBallDrop() { CheckBallHitRedLine(); }
-
     Paddle& GetPaddle() { return paddle; }
     std::vector<Ball>& GetBalls() { return balls; }
     float GetOriginalPaddleWidth() const { return originalPaddleWidth; }
     float GetOriginalBallRadius() const { return originalBallRadius; }
-    void AddBallTrail() { ballTrails.emplace_back(); }
-    
+    void AddBallTrail() { ballTrails.emplace_back(maxTrailLength); } 
     bool HasEffectOfType(const std::string& typeName) const;
     const std::vector<std::unique_ptr<Effect>>& GetActiveEffects() const { return activeEffects; }
-
     void StartSinglePlayer();
     bool ShouldExitToRaceLobby() const { return exitToRaceLobby; }
     bool exitToVersusLobby = false;

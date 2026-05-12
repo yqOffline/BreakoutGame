@@ -33,6 +33,7 @@ set(SOURCES
     TextureCache.cpp
     NetworkThread.cpp
     ThreadPool.cpp
+    Grid.cpp
 )
 
 add_executable(game ${SOURCES})

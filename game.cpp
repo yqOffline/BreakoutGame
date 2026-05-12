@@ -3,6 +3,7 @@
 #include "SoundManager.h"
 #include "TextureCache.h"
 #include "ThreadPool.h"
+#include "rlgl.h"
 #include <fstream>
 #include <iostream>
 #include <cmath>
@@ -28,7 +29,8 @@ Game::Game(int screenWidth, int screenHeight)
       showEraseHint(false),eraseHintTimer(0.0f),
       exitToRaceLobby(false),
       loadState(LoadState::IDLE),
-      levelLoadState(LevelLoadState::IDLE)
+      levelLoadState(LevelLoadState::IDLE),
+      brickGrid(80.0f, 40.0f, screenWidth, screenHeight)
 {
     // 1. 加载配置文件
     std::ifstream f("config.json");
@@ -40,7 +42,7 @@ Game::Game(int screenWidth, int screenHeight)
 
     // 2. 加载效果工厂配置
     EffectFactory::LoadConfig(config);
-
+    maxTrailLength = config["trail"].value("max_length", 10);
     // 3. 用配置值设置 balls
     float bx = config["ball"]["init_x"];
     float by = config["ball"]["init_y"];
@@ -48,7 +50,7 @@ Game::Game(int screenWidth, int screenHeight)
     float spx = config["ball"]["speed_x"];
     float spy = config["ball"]["speed_y"];
     balls.emplace_back(Vector2{bx, by}, Vector2{spx, spy}, br);
-    ballTrails.emplace_back();
+    ballTrails.emplace_back(maxTrailLength);
 
     // 4. 设置 paddle
     float pw = config["paddle"]["width"];
@@ -69,7 +71,7 @@ Game::Game(int screenWidth, int screenHeight)
     particlesPerBrick = config["particles"].value("count_per_brick", 12);
     particleGravity = config["particles"].value("gravity", 300.0f);
     
-    maxTrailLength = config["trail"].value("max_length", 10);
+
     
     totalLevels = levelManager.GetLevelCount();
     
@@ -120,6 +122,9 @@ Game::Game(int screenWidth, int screenHeight)
     lastBrickIndex = -1;
     lastBrickAnimTimer = 0.0f;
 
+    // 确保粒子系统拥有纹理
+    particleSystem.LoadDefaultTexture();
+
     // 10. 加载排行榜
     LoadRanking();
 }
@@ -141,14 +146,6 @@ void Game::ClearRanking() {
 void Game::ResetGameState() {
     currentLevel = 0;
     LoadLevel(0);
-    
-    balls.clear();
-    ballTrails.clear();
-    Vector2 initPos = { (float)config["ball"]["init_x"], (float)config["ball"]["init_y"] };
-    Vector2 initSpeed = { 0.0f, 0.0f };
-    float initRadius = config["ball"]["radius"];
-    balls.emplace_back(initPos, initSpeed, initRadius);
-    ballTrails.emplace_back();
     
     score = 0;
     hearts = config["game"]["initial_hearts"];
@@ -173,7 +170,6 @@ void Game::ResetGameState() {
     gameTimer = 0.0f;
     totalDeaths = 0;
     timerRunning = false;
-    
     isHost = false;
     isGuest = false;
     multiSubState = MultiplayerSubState::LOBBY;
@@ -186,6 +182,9 @@ void Game::ResetGameState() {
     }
     useLoadedTexture = false;
     levelLoadState = LevelLoadState::IDLE;
+
+    activeBrickCount = 0;
+    // 注意：activeBrickCount 将在 LoadLevel(0) 中被正确设置
 }
 
 void Game::ResetGame() {
@@ -250,7 +249,7 @@ void Game::ApplyLevelLoadData(const LevelLoadData& data) {
     Vector2 initSpeed = { 0.0f, 0.0f };
     float initRadius = config["ball"]["radius"];
     balls.emplace_back(initPos, initSpeed, initRadius);
-    ballTrails.emplace_back();
+    ballTrails.emplace_back(maxTrailLength);
 
     skillBalls.clear();
     particleSystem.Clear();
@@ -316,9 +315,9 @@ void Game::CheckBallHitRedLine() {
             float paddleCenterX = paddle.GetRectangle().x + paddle.GetRectangle().width / 2;
             float paddleTopY = paddle.GetRectangle().y - originalBallRadius - 2;
             balls.emplace_back(Vector2{paddleCenterX, paddleTopY},
-                              Vector2{config["ball"]["speed_x"], config["ball"]["speed_y"]},
-                              originalBallRadius);
-            ballTrails.emplace_back();
+                            Vector2{config["ball"]["speed_x"], config["ball"]["speed_y"]},
+                            originalBallRadius);
+            ballTrails.emplace_back(maxTrailLength);
         }
     }
 }
@@ -531,9 +530,8 @@ void Game::Update(float dt) {
             }
             loadState = LoadState::DONE;
         }
-        return; // 跳过游戏逻辑
+        return;
     }
-    // -------------------------------------------------
 
     // ---------- 板块二：异步关卡加载处理 ----------
     if (levelLoadState == LevelLoadState::LOADING) {
@@ -541,14 +539,11 @@ void Game::Update(float dt) {
             levelLoadFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             LevelLoadData data = levelLoadFuture.get();
             ApplyLevelLoadData(data);
-            // 加载完成后，将球速度设为配置值，让游戏继续进行
             for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
             levelLoadState = LevelLoadState::DONE;
-            // 继续游戏，不改变 currentState（游戏仍在 PLAYING）
         }
-        return; // 跳过游戏逻辑
+        return;
     }
-    // --------------------------------------------
 
     if (currentState == GameState::PLAYING && timerRunning) {
         gameTimer += dt;
@@ -564,7 +559,10 @@ void Game::Update(float dt) {
 
     if (currentState != GameState::PLAYING) return;
     
-    // 后门按键
+    // ========== 性能测量起点 ==========
+    double totalStart = GetTime();
+    
+    // 后门按键（不计入测量）
     if (IsKeyPressed(KEY_C)) {
         if (currentLevel == totalLevels - 1) {
             currentState = GameState::VICTORY;
@@ -585,13 +583,11 @@ void Game::Update(float dt) {
         return;
     }
     
-    // 1. 拖尾记录
+    // 1. 拖尾记录 + 球移动与边界/挡板碰撞 → 物理部分
+    double physStart = GetTime();
     for (size_t i = 0; i < balls.size(); ++i) {
-        ballTrails[i].push_back(balls[i].GetPosition());
-        if ((int)ballTrails[i].size() > maxTrailLength) ballTrails[i].pop_front();
+        ballTrails[i].push(balls[i].GetPosition());
     }
-
-    // 2. 主球移动与碰撞
     for (auto& ball : balls) {
         ball.Move();
         if (ball.BounceEdge(GetScreenWidth(), GetScreenHeight())) {
@@ -601,16 +597,21 @@ void Game::Update(float dt) {
             soundManager.PlayHitSound();
         }
     }
+    m_physicsTime = GetTime() - physStart;
 
-    // 3. 砖块碰撞处理
+    // 2. 砖块碰撞检测
+    double brickStart = GetTime();
+    // 使用网格查询候选砖块
+    std::vector<Brick*> candidates;
     for (auto& ball : balls) {
-        for (auto& brick : bricks) {
-            if (brick.IsActive() && CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), brick.GetRectangle())) {
+        brickGrid.Query(ball.GetPosition(), ball.GetRadius(), candidates);
+        for (Brick* brickPtr : candidates) {
+            Brick& brick = *brickPtr;
+            if (!brick.IsActive()) continue;   // 双重检查，虽然 Query 已过滤
+            if (CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), brick.GetRectangle())) {
                 soundManager.PlayHitSound();
                 int damage = 1;
-                if (HasEffectOfType("Explosion")) {
-                    damage = 2;
-                }
+                if (HasEffectOfType("Explosion")) damage = 2;
                 bool destroyed = false;
                 for (int d = 0; d < damage; ++d) {
                     if (brick.TakeDamage()) {
@@ -633,10 +634,11 @@ void Game::Update(float dt) {
                             case SkillType::EXPLOSION:     glowColor = ORANGE; break;
                             case SkillType::INVINCIBLE:    glowColor = GOLD; break;
                             case SkillType::SPLIT:         glowColor = SKYBLUE; break;
-                            default: break;
                         }
-                        skillBalls.emplace_back(spawnPos, type, skillBallRadius, Vector2{0, skillBallSpeedY}, glowColor);
+                        skillBalls.emplace_back(spawnPos, type, skillBallRadius,
+                                                Vector2{0, skillBallSpeedY}, glowColor);
                     }
+                    activeBrickCount--;  // ★ 活跃砖块减少
                 }
                 Vector2 sp = ball.GetSpeed();
                 sp.y *= -1;
@@ -645,15 +647,20 @@ void Game::Update(float dt) {
                     ball.SetPosition({ ball.GetPosition().x, brick.GetRectangle().y + brick.GetRectangle().height + ball.GetRadius() });
                 else
                     ball.SetPosition({ ball.GetPosition().x, brick.GetRectangle().y - ball.GetRadius() });
-                break;
+                // 注意：break 只跳出内层 for (candidates)，仍需跳出球循环吗？
+                // 原逻辑每个球只处理一块砖，然后 break 外层循环。此处应保留 break。
+                goto nextBall; // 跳出到下一个球
             }
         }
+        nextBall:;
     }
 
-    // 4. 球间碰撞
+    // 3. 球间碰撞
     HandleBallCollisions();
+    m_collisionTime = GetTime() - brickStart;
 
-    // 5. 技能球更新
+    // 4. 技能球更新 + 检测收集
+    double skillStart = GetTime();
     for (auto& sb : skillBalls) {
         sb.Update(dt);
         if (sb.active && CheckCollisionCircleRec(sb.GetPosition(), sb.GetRadius(), paddle.GetRectangle())) {
@@ -668,17 +675,20 @@ void Game::Update(float dt) {
     skillBalls.erase(std::remove_if(skillBalls.begin(), skillBalls.end(),
         [](const SkillBall& sb) { return !sb.active; }), skillBalls.end());
 
-    // 6. 粒子更新
+    // 5. 粒子系统
     particleSystem.Update(dt, particleGravity);
+    m_skillParticleTime = GetTime() - skillStart;
 
-    // 7. 效果更新
+    // 6. 效果更新
+    double effectStart = GetTime();
     UpdateEffects(dt);
+    m_effectsTime = GetTime() - effectStart;
 
-    // 8. 挡板移动
+    // 7. 挡板移动
     if (IsKeyDown(KEY_LEFT)) paddle.MoveLeft(paddleMoveSpeed);
     if (IsKeyDown(KEY_RIGHT)) paddle.MoveRight(paddleMoveSpeed);
 
-    // 9. 最后一块砖特殊动画（略）
+    // 8. 最后一块砖动画（略）
     int activeCount = 0;
     int lastActiveIdx = -1;
     for (int i = 0; i < (int)bricks.size(); ++i) {
@@ -714,11 +724,14 @@ void Game::Update(float dt) {
         b.SetRect({ newX, newY, newW, newH });
     }
 
-    // 10. 红线碰撞检测
+    // 9. 红线碰撞检测
     CheckBallHitRedLine();
 
-    // 11. 关卡过渡检查
+    // 10. 关卡过渡检查
     CheckLevelTransition();
+
+    m_totalTime = GetTime() - totalStart;
+    // ========== 测量结束 ==========
 }
 
 void Game::Draw() {
@@ -907,6 +920,12 @@ void Game::Draw() {
     float frameTime = GetFrameTime() * 1000.0f; // 毫秒
     DrawText(TextFormat("FPS: %d", fps), GetScreenWidth() - 150, 10, 20, YELLOW);
     DrawText(TextFormat("Frame: %.2f ms", frameTime), GetScreenWidth() - 200, 30, 20, YELLOW);
+        // 性能模块耗时（毫秒）
+    DrawText(TextFormat("Phys: %.2fms", m_physicsTime * 1000), GetScreenWidth() - 150, 50, 18, GREEN);
+    DrawText(TextFormat("Col:  %.2fms", m_collisionTime * 1000), GetScreenWidth() - 150, 65, 18, GREEN);
+    DrawText(TextFormat("SP:   %.2fms", m_skillParticleTime * 1000), GetScreenWidth() - 150, 80, 18, GREEN);
+    DrawText(TextFormat("Eff:  %.2fms", m_effectsTime * 1000), GetScreenWidth() - 150, 95, 18, GREEN);
+    DrawText(TextFormat("Total:%.2fms", m_totalTime * 1000), GetScreenWidth() - 150, 110, 18, YELLOW);
 }
 
 void Game::LoadLevel(int index) {
@@ -924,16 +943,21 @@ void Game::LoadLevel(int index) {
     levelManager.LoadLevel(index, bricks, brickWidth, startX,
                            GetScreenWidth(), GetScreenHeight());
 
+    // ★ 清空球和拖尾，并重新添加一个球 + 拖尾
     balls.clear();
     ballTrails.clear();
     Vector2 initPos = { (float)config["ball"]["init_x"], (float)config["ball"]["init_y"] };
     Vector2 initSpeed = { 0.0f, 0.0f };
     float initRadius = config["ball"]["radius"];
     balls.emplace_back(initPos, initSpeed, initRadius);
-    ballTrails.emplace_back();
+    ballTrails.emplace_back(maxTrailLength);   // ★ 传入最大长度
 
     skillBalls.clear();
     particleSystem.Clear();
+
+    // ★ 对象池预留空间
+    skillBalls.reserve(20);
+    balls.reserve(8);
 
     lastBrickAnimating = false;
     lastBrickIndex = -1;
@@ -947,17 +971,18 @@ void Game::LoadLevel(int index) {
     for (auto& ball : balls) {
         ball.SetRadius(originalBallRadius);
     }
+
+    // 构建碰撞网格
+    brickGrid.Build(bricks);
+    // 统计活跃砖块数量
+    activeBrickCount = 0;
+    for (const auto& b : bricks) {
+        if (b.IsActive()) activeBrickCount++;
+    }
 }
 
 void Game::CheckLevelTransition() {
-    bool allInactive = true;
-    for (const auto& b : bricks) {
-        if (b.IsActive()) {
-            allInactive = false;
-            break;
-        }
-    }
-    if (allInactive && currentState == GameState::PLAYING) {
+    if (activeBrickCount == 0 && currentState == GameState::PLAYING) {
         if (currentLevel + 1 < totalLevels) {
             currentState = GameState::LEVEL_CLEAR;
             soundManager.PlayLevelComplete();

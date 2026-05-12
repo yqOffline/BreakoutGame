@@ -1,5 +1,6 @@
 #include "RacePlayer.h"
 #include "EffectFactory.h"
+#include "rlgl.h"
 #include <algorithm>
 #include <cmath>
 
@@ -7,14 +8,16 @@ RacePlayer::RacePlayer(int sw, int sh, const json& cfg, bool left)
     : screenWidth(sw), screenHeight(sh), isLeftSide(left), config(cfg),
       score(0), hearts(cfg["game"]["initial_hearts"]),
       state(RacePlayerState::PLAYING), timerRunning(false),
-      gameTimer(0.0f), totalDeaths(0), opponentPaddleX(0.0f), hasOpponentPaddle(false)
-{
+      gameTimer(0.0f), totalDeaths(0), opponentPaddleX(0.0f), hasOpponentPaddle(false),
+      brickGrid(80.0f,40.0f,sw,sh)
+{   
+    maxTrailLength = config["trail"].value("max_length", 10);
     // 暂不加载关卡，等待种子设置后由外部调用 LoadLevel
     float br = config["ball"]["radius"];
     float spx = config["ball"]["speed_x"];
     float spy = config["ball"]["speed_y"];
     balls.emplace_back(Vector2{0,0}, Vector2{spx, spy}, br);
-    ballTrails.emplace_back();
+    ballTrails.emplace_back(maxTrailLength);
 
     float pw = config["paddle"]["width"];
     float ph = config["paddle"]["height"];
@@ -30,7 +33,7 @@ RacePlayer::RacePlayer(int sw, int sh, const json& cfg, bool left)
     skillBallRadius = config["skill_ball"].value("radius", 6.0f);
     particlesPerBrick = config["particles"].value("count_per_brick", 12);
     particleGravity = config["particles"].value("gravity", 300.0f);
-    maxTrailLength = config["trail"].value("max_length", 10);
+
 
     totalLevels = levelManager.GetLevelCount();
     originalPaddleWidth = paddle.GetWidth();
@@ -38,10 +41,11 @@ RacePlayer::RacePlayer(int sw, int sh, const json& cfg, bool left)
 
     redLine = { 0.0f, paddle.GetRectangle().y + paddle.GetRectangle().height + 5.0f,
                 (float)screenWidth, 3.0f };
+    
+    particleSystem.LoadDefaultTexture();
 }
 
 RacePlayer::~RacePlayer() {}
-
 void RacePlayer::LoadLevel(int index) {
     if (index >= totalLevels) {
         state = RacePlayerState::VICTORY;
@@ -60,7 +64,7 @@ void RacePlayer::LoadLevel(int index) {
     Vector2 initSpeed = { 0.0f, 0.0f };
     float initRadius = config["ball"]["radius"];
     balls.emplace_back(initPos, initSpeed, initRadius);
-    ballTrails.emplace_back();
+    ballTrails.emplace_back(maxTrailLength);   // ★
 
     skillBalls.clear();
     particleSystem.Clear();
@@ -69,34 +73,37 @@ void RacePlayer::LoadLevel(int index) {
     activeEffects.clear();
     paddle.SetWidth(originalPaddleWidth);
     for (auto& ball : balls) ball.SetRadius(originalBallRadius);
+
+    // 预留容量
+    skillBalls.reserve(20);
+    balls.reserve(8);
+
+    brickGrid.Build(bricks);
+    activeBrickCount = 0;
+    for (const auto& b : bricks) if (b.IsActive()) activeBrickCount++;
 }
 
 void RacePlayer::ResetForNewGame() {
+    // 1. 回到第一关（LoadLevel 会重建球、拖尾、砖块、粒子、效果等）
     currentLevel = 0;
     LoadLevel(0);
+
+    // 2. 重置游戏统计数据（LoadLevel 已处理 hearts 和 activeBrickCount，其他需手动）
     score = 0;
-    hearts = config["game"]["initial_hearts"];
     totalDeaths = 0;
     gameTimer = 0.0f;
     timerRunning = false;
     state = RacePlayerState::PLAYING;
+
+    // 3. 清除对手挡板信息
     opponentPaddleX = 0.0f;
     hasOpponentPaddle = false;
 
-    balls.clear();
-    ballTrails.clear();
-    Vector2 initPos = { (float)config["ball"]["init_x"], (float)config["ball"]["init_y"] };
-    Vector2 initSpeed = { 0.0f, 0.0f };
-    float initRadius = config["ball"]["radius"];
-    balls.emplace_back(initPos, initSpeed, initRadius);
-    ballTrails.emplace_back();
-
-    skillBalls.clear();
-    particleSystem.Clear();
-    for (auto& effect : activeEffects) effect->Revert(nullptr);
-    activeEffects.clear();
+    // 4. 确保 paddle 宽度和球半径还原（LoadLevel 已经做了，这里再次确保无副作用也可，但不是必须）
     paddle.SetWidth(originalPaddleWidth);
-    for (auto& ball : balls) ball.SetRadius(originalBallRadius);
+    for (auto& ball : balls) {
+        ball.SetRadius(originalBallRadius);
+    }
 }
 
 void RacePlayer::SetRandomSeed(unsigned int seed) {
@@ -136,7 +143,7 @@ void RacePlayer::SetOpponentPaddleX(float x) {
     paddle.SetPosition(x, paddle.GetRectangle().y);
 }
 
-// ★ 关键：本地挡板移动，使用自己的 screenWidth 作为边界
+// ★ 关键：本地挡板移动，使用自己的 screenWidth 作为边界 
 void RacePlayer::HandleInput() {
     if (state != RacePlayerState::PLAYING) return;
 
@@ -188,7 +195,7 @@ void RacePlayer::CheckBallHitRedLine() {
             balls.emplace_back(Vector2{paddleCenterX, paddleTopY},
                               Vector2{config["ball"]["speed_x"], config["ball"]["speed_y"]},
                               originalBallRadius);
-            ballTrails.emplace_back();
+            ballTrails.emplace_back(maxTrailLength);
         }
     }
 }
@@ -265,11 +272,7 @@ void RacePlayer::HandleBallCollisions() {
 }
 
 void RacePlayer::CheckLevelTransition() {
-    bool allInactive = true;
-    for (const auto& b : bricks) {
-        if (b.IsActive()) { allInactive = false; break; }
-    }
-    if (allInactive && state == RacePlayerState::PLAYING) {
+    if (activeBrickCount == 0 && state == RacePlayerState::PLAYING) {
         if (currentLevel + 1 < totalLevels) {
             state = RacePlayerState::LEVEL_CLEAR;
             soundManager.PlayLevelComplete();
@@ -282,21 +285,19 @@ void RacePlayer::CheckLevelTransition() {
         }
     }
 }
-
 void RacePlayer::Update(float dt) {
-    // 只有在 PLAYING 且未暂停时才走时
     if (state == RacePlayerState::PLAYING && timerRunning)
         gameTimer += dt;
 
     if (state != RacePlayerState::PLAYING) return;
 
-    // 拖尾
-    for (size_t i = 0; i < balls.size(); ++i) {
-        ballTrails[i].push_back(balls[i].GetPosition());
-        if ((int)ballTrails[i].size() > maxTrailLength) ballTrails[i].pop_front();
-    }
+    double totalStart = GetTime();
 
-    // 球移动与边界/挡板碰撞
+    // 拖尾 + 球物理
+    double physStart = GetTime();
+    for (size_t i = 0; i < balls.size(); ++i) {
+        ballTrails[i].push(balls[i].GetPosition());
+    }
     for (auto& ball : balls) {
         ball.Move();
         if (ball.BounceEdge(screenWidth, screenHeight))
@@ -304,11 +305,16 @@ void RacePlayer::Update(float dt) {
         if (ball.CheckCollisionPaddle(paddle))
             soundManager.PlayHitSound();
     }
+    m_physicsTime = GetTime() - physStart;
 
-    // 砖块碰撞
+    double brickStart = GetTime();
+    std::vector<Brick*> candidates;
     for (auto& ball : balls) {
-        for (auto& brick : bricks) {
-            if (brick.IsActive() && CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), brick.GetRectangle())) {
+        brickGrid.Query(ball.GetPosition(), ball.GetRadius(), candidates);
+        for (Brick* brickPtr : candidates) {
+            Brick& brick = *brickPtr;
+            if (!brick.IsActive()) continue;
+            if (CheckCollisionCircleRec(ball.GetPosition(), ball.GetRadius(), brick.GetRectangle())) {
                 soundManager.PlayHitSound();
                 int damage = HasEffectOfType("Explosion") ? 2 : 1;
                 bool destroyed = false;
@@ -333,6 +339,7 @@ void RacePlayer::Update(float dt) {
                         }
                         skillBalls.emplace_back(spawnPos, type, skillBallRadius, Vector2{0, skillBallSpeedY}, glow);
                     }
+                    activeBrickCount--;   // 活跃砖块数减1
                 }
                 Vector2 sp = ball.GetSpeed();
                 sp.y *= -1;
@@ -341,13 +348,17 @@ void RacePlayer::Update(float dt) {
                     ball.SetPosition({ ball.GetPosition().x, brick.GetRectangle().y + brick.GetRectangle().height + ball.GetRadius() });
                 else
                     ball.SetPosition({ ball.GetPosition().x, brick.GetRectangle().y - ball.GetRadius() });
-                break;
+                goto nextBall;      // 跳出到下一个球
             }
         }
+        nextBall:;
     }
 
     HandleBallCollisions();
+    m_collisionTime = GetTime() - brickStart;
 
+    // 技能球 + 粒子
+    double skillStart = GetTime();
     for (auto& sb : skillBalls) {
         sb.Update(dt);
         if (sb.active && CheckCollisionCircleRec(sb.GetPosition(), sb.GetRadius(), paddle.GetRectangle())) {
@@ -359,11 +370,19 @@ void RacePlayer::Update(float dt) {
     }
     skillBalls.erase(std::remove_if(skillBalls.begin(), skillBalls.end(),
         [](const SkillBall& sb) { return !sb.active; }), skillBalls.end());
-
     particleSystem.Update(dt, particleGravity);
+    m_skillParticleTime = GetTime() - skillStart;
+
+    // 效果更新
+    double effectStart = GetTime();
     UpdateEffects(dt);
+    m_effectsTime = GetTime() - effectStart;
+
+    // 红线与关卡过渡
     CheckBallHitRedLine();
     CheckLevelTransition();
+
+    m_totalTime = GetTime() - totalStart;
 }
 
 void RacePlayer::Draw() {
@@ -394,4 +413,12 @@ void RacePlayer::Draw() {
         DrawText(TextFormat("%s: %.1fs", effect->GetName().c_str(), effect->GetRemainingTime()), 10, effectY, 20, GREEN);
         effectY += 20;
     }
+
+    DrawText(TextFormat("Phys: %.2fms", m_physicsTime * 1000), 700, 5, 18, GREEN);
+    DrawText(TextFormat("Col:  %.2fms", m_collisionTime * 1000),700, 20, 18, GREEN);
+    DrawText(TextFormat("SP:   %.2fms", m_skillParticleTime * 1000), 700, 35, 18, GREEN);
+    DrawText(TextFormat("Eff:  %.2fms", m_effectsTime * 1000), 700, 50, 18, GREEN);
+    DrawText(TextFormat("Total:%.2fms", m_totalTime * 1000), 700, 65, 18, YELLOW);
+
+   
 }
