@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <future>
+#include <cstdio>   // for std::remove
 
 #include "json.hpp"
 using json = nlohmann::json;
@@ -76,6 +77,17 @@ struct LevelLoadData {
     float startX;
     int levelIndex;
 };
+
+// ---------- 新增：存档数据结构 ----------
+struct SaveData {
+    int version = 1;
+    int currentLevel = 0;
+    int score = 0;
+    int hearts = 0;
+    float gameTimer = 0.0f;
+    int totalDeaths = 0;
+};
+
 class Game {
 private:
     json config;
@@ -84,7 +96,7 @@ private:
     Paddle paddle;
     std::vector<Brick> bricks;
     
-    Grid brickGrid;                // ★ 网格
+    Grid brickGrid;
 
     int score;
     int hearts;
@@ -95,6 +107,9 @@ private:
     Rectangle backToModeBtn, hostBtn, guestBtn, startGameBtn, backToModeBtn2;
     Rectangle continueBtn, restartBtn, gameOverRestartBtn, replayBtn, goAheadBtn;
     Rectangle victoryRestartBtn, victoryReplayBtn, backBtn;
+
+    // ---------- 新增：继续游戏按钮 ----------
+    Rectangle continueGameBtn;
 
     Texture2D backgroundTex, paddleTex;
     bool bgLoaded, paddleLoaded;
@@ -141,7 +156,7 @@ private:
 
     void ResetBricks();
     void CheckBallHitRedLine();
-    void LoadLevel(int index);
+    void LoadLevel(int index, bool resetHearts = true);   // 修改：增加 resetHearts 参数
     void ApplyEffect(std::unique_ptr<Effect> effect);
     void UpdateEffects(float dt);
     void CheckLevelTransition();
@@ -178,6 +193,19 @@ private:
 
     int activeBrickCount = 0;
 
+    // ---------- 新增：存档路径 ----------
+    const std::string saveFileName = "save.json";
+    bool gameJustLoaded = false;
+    
+    // ---------- 关卡编辑器相关 ----------
+    bool editingMode = false;                  // 是否处于编辑模式
+    Rectangle editorGridArea;                  // 编辑模式下的网格区域（可选）
+    int selectedBrickType = 1;                 // 当前选择的砖块类型（血量）
+
+    void SaveCurrentLayoutToJSON();            // 保存当前砖块布局到 JSON 文件
+    void ToggleEditMode();                     // 切换编辑模式
+    void HandleEditModeInput();                // 编辑模式下的输入处理
+    void DrawEditModeUI();                     // 绘制编辑模式界面
 public:
     Game(int screenWidth, int screenHeight);
     ~Game();
@@ -200,6 +228,15 @@ public:
     bool ShouldExitToRaceLobby() const { return exitToRaceLobby; }
     bool exitToVersusLobby = false;
     bool ShouldExitToVersusLobby() const { return exitToVersusLobby; }
+
+    // ---------- 新增：存档/读档接口 ----------
+    void SaveGame();
+    bool LoadGame();   // 返回是否成功加载
+
+    bool HasSaveFile() const;
+    void DeleteSaveFile();
+    void ContinueGame();
+    bool IsEditMode() const { return editingMode; }
 };
 
-#endif
+#endif // GAME_H

@@ -50,6 +50,7 @@ private:
     int currentLevelIndex = 0;
     
     std::mt19937 rng;
+    std::vector<json> levelRawConfigs;
 };
 
 #endif // LEVEL_MANAGER_H

@@ -4,6 +4,7 @@
 #include "TextureCache.h"
 #include "ThreadPool.h"
 #include "rlgl.h"
+#include <set>
 #include <fstream>
 #include <iostream>
 #include <cmath>
@@ -109,6 +110,7 @@ Game::Game(int screenWidth, int screenHeight)
     victoryRestartBtn = { (float)screenWidth / 2 - 130, (float)screenHeight / 2 + 40, 120, 50 };
     victoryReplayBtn  = { (float)screenWidth / 2 + 10,  (float)screenHeight / 2 + 40, 120, 50 };
     backBtn = { (float)screenWidth / 2 - 60, (float)screenHeight - 80, 120, 50 };
+    continueGameBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 - 170, 120, 50 };
 
     // 9. 加载纹理（使用 TextureCache 单例）
     backgroundTex = TextureCache::Instance().GetTexture("1.png");
@@ -140,6 +142,99 @@ Game::~Game() {
 void Game::ClearRanking() {
     rankList.clear();
     SaveRanking();
+}
+
+void Game::SaveGame() {
+    SaveData data;
+    data.version = 1;
+    data.currentLevel = currentLevel;
+    data.score = score;
+    data.hearts = hearts;
+    data.gameTimer = gameTimer;
+    data.totalDeaths = totalDeaths;
+
+    json saveJson;
+    saveJson["version"] = data.version;
+    saveJson["current_level"] = data.currentLevel;
+    saveJson["score"] = data.score;
+    saveJson["hearts"] = data.hearts;
+    saveJson["game_timer"] = data.gameTimer;
+    saveJson["total_deaths"] = data.totalDeaths;
+
+    std::ofstream file(saveFileName);
+    if (file.is_open()) {
+        file << saveJson.dump(4); // 格式化输出
+        file.close();
+        std::cout << "Game saved." << std::endl;
+    } else {
+        std::cerr << "Failed to save game!" << std::endl;
+    }
+}
+
+bool Game::LoadGame() {
+    std::ifstream file(saveFileName);
+    if (!file.is_open()) {
+        return false;
+    }
+    json saveJson;
+    try {
+        file >> saveJson;
+    } catch (const json::parse_error& e) {
+        std::cerr << "Save file parse error: " << e.what() << std::endl;
+        return false;
+    }
+
+    // 版本检查与兼容
+    int version = saveJson.value("version", 0);
+    if (version == 0) {
+        // 旧版存档（无version字段），尝试按旧格式读取
+        std::cout << "Detected old save format, attempting to load..." << std::endl;
+        currentLevel = saveJson.value("current_level", 0);
+        score = saveJson.value("score", 0);
+        hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
+        gameTimer = saveJson.value("game_timer", 0.0f);
+        totalDeaths = saveJson.value("total_deaths", 0);
+        // 立即保存为新版本
+        SaveGame();
+    } else if (version == 1) {
+        currentLevel = saveJson.value("current_level", 0);
+        score = saveJson.value("score", 0);
+        hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
+        gameTimer = saveJson.value("game_timer", 0.0f);
+        totalDeaths = saveJson.value("total_deaths", 0);
+    } else {
+        std::cerr << "Unsupported save version: " << version << std::endl;
+        return false;
+    }
+
+    // 加载对应关卡（会重置砖块、球等）
+    LoadLevel(currentLevel, false);  // 不重置 hearts
+    // 覆盖 hearts 为存档值
+    hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
+    // 确保球为静止状态（附着在挡板）
+    for (auto& ball : balls) {
+        ball.SetSpeed({0, 0});
+    }
+    // 设置游戏状态为暂停，等待玩家按空格或继续按钮
+    currentState = GameState::PAUSED;
+    pauseCause = PauseCause::MANUAL_PAUSE;
+    timerRunning = false;
+    return true;
+}
+
+bool Game::HasSaveFile() const {
+    std::ifstream file(saveFileName);
+    return file.good();
+}
+
+void Game::DeleteSaveFile() {
+    std::remove(saveFileName.c_str());
+}
+
+void Game::ContinueGame() {
+    if (LoadGame()) {
+        gameJustLoaded = true;
+    }
 }
 
 // ======================== 完全重置游戏状态 ========================
@@ -183,8 +278,11 @@ void Game::ResetGameState() {
     useLoadedTexture = false;
     levelLoadState = LevelLoadState::IDLE;
 
-    activeBrickCount = 0;
-    // 注意：activeBrickCount 将在 LoadLevel(0) 中被正确设置
+    // 注意：activeBrickCount 已在 LoadLevel(0) 中正确计算，此处不再清零
+    // activeBrickCount = 0;   // ← 删除这一行
+
+    std::remove(saveFileName.c_str());
+    editingMode = false;
 }
 
 void Game::ResetGame() {
@@ -302,6 +400,8 @@ void Game::CheckBallHitRedLine() {
     if (balls.empty()) {
         hearts--;
         totalDeaths++;
+        SaveGame();   // ★ 自动保存
+
         if (hearts <= 0) {
             currentState = GameState::GAME_OVER;
             timerRunning = false;
@@ -364,6 +464,18 @@ void Game::HandleInput(Vector2 mousePos) {
     // 任何加载期间，忽略所有输入
     if (loadState == LoadState::LOADING || levelLoadState == LevelLoadState::LOADING) return;
 
+    // 新增：按 E 键切换编辑模式（仅在单机菜单或暂停状态可用，不干扰正常游戏）
+    if (IsKeyPressed(KEY_E) && (currentState == GameState::SINGLE_MENU || currentState == GameState::PAUSED || currentState == GameState::PLAYING)) {
+        ToggleEditMode();
+        return;
+    }
+    
+    // 如果处于编辑模式，只处理编辑模式输入，不处理正常游戏输入
+    if (editingMode) {
+        HandleEditModeInput();
+        return;
+    }
+
     // ---------- 板块一：异步纹理加载 ----------
     if (IsKeyPressed(KEY_L) && loadState == LoadState::IDLE) {
         pendingTexturePath = "big_image.png";
@@ -373,15 +485,12 @@ void Game::HandleInput(Vector2 mousePos) {
         }, pendingTexturePath);
         return;
     }
-    // ---------------------------------------
 
     // ---------- 板块二：异步关卡加载 ----------
     if (IsKeyPressed(KEY_N) && levelLoadState == LevelLoadState::IDLE && currentState == GameState::PLAYING) {
         if (currentLevel + 1 < totalLevels) {
             pendingLevelIndex = currentLevel + 1;
             levelLoadState = LevelLoadState::LOADING;
-            
-            // 使用线程池
             static ThreadPool levelPool(2);
             levelLoadFuture = levelPool.Enqueue([this]() {
                 return GenerateLevelData(pendingLevelIndex);
@@ -389,7 +498,6 @@ void Game::HandleInput(Vector2 mousePos) {
         }
         return;
     }
-    // -----------------------------------------
 
     switch (currentState) {
         case GameState::MODE_SELECT:
@@ -405,32 +513,89 @@ void Game::HandleInput(Vector2 mousePos) {
             break;
 
         case GameState::SINGLE_MENU:
+            // 开始新游戏
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) || IsKeyPressed(KEY_SPACE)) {
+                StartSinglePlayer();
                 currentState = GameState::PLAYING;
                 for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
                 timerRunning = true;
             }
+            // 排行榜
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, rankBtn)) || IsKeyPressed(KEY_R)) {
                 currentState = GameState::RANKING;
             }
+            // 清除排行榜
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, eraseRankBtn)) || IsKeyPressed(KEY_E)) {
                 ClearRanking();
                 showEraseHint = true;
                 eraseHintTimer = 0.5f;
             }
+            // 返回模式选择
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backToModeBtn)) || IsKeyPressed(KEY_B)) {
                 currentState = GameState::MODE_SELECT;
+            }
+            // 继续游戏（读档）
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueGameBtn)) || IsKeyPressed(KEY_C)) {
+                if (LoadGame()) {
+                    // 加载成功后，游戏状态已在 LoadGame 中设置为 PAUSED（等待玩家按空格开始）
+                    // 这里不需要额外动作，用户看到暂停界面后按空格或继续按钮即可开始
+                    // 若希望直接开始，可将 LoadGame 中的 currentState 改为 PLAYING
+                } else {
+                    showEraseHint = true;   // 显示加载失败提示
+                    eraseHintTimer = 2.0f;
+                }
             }
             break;
 
         case GameState::MULTIPLAYER_MENU:
         case GameState::MULTIPLAYER_LOBBY:
-            // ... 原有代码保持不变，此处省略，实际文件中保留原有多人菜单逻辑 ...
-            break;
+                // 双人等待界面（选择 Host/Guest）
+                if (multiSubState == MultiplayerSubState::LOBBY) {
+                    // 处理 Host 按钮：点击或按 H 切换选中/取消
+                    if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, hostBtn)) || IsKeyPressed(KEY_H)) {
+                        if (isHost) {
+                            isHost = false;
+                        } else {
+                            isHost = true;
+                            isGuest = false;
+                        }
+                    }
+                    // 处理 Guest 按钮：点击或按 G 切换选中/取消
+                    if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, guestBtn)) || IsKeyPressed(KEY_G)) {
+                        if (isGuest) {
+                            isGuest = false;
+                        } else {
+                            isGuest = true;
+                            isHost = false;
+                        }
+                    }
+                    // READY 按钮：仅当 isHost 时有效
+                    if (isHost && ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startGameBtn)) || IsKeyPressed(KEY_S))) {
+                        multiSubState = MultiplayerSubState::READY;
+                        currentState = GameState::MULTIPLAYER_READY;
+                    }
+                    // 返回按钮
+                    if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backToModeBtn2)) || IsKeyPressed(KEY_B)) {
+                        currentState = GameState::MODE_SELECT;
+                        isHost = isGuest = false;
+                    }
+                }
+                break;
 
-        case GameState::MULTIPLAYER_READY:
-            // ... 省略 ...
-            break;
+            case GameState::MULTIPLAYER_READY:
+                // 准备开始界面
+                if (isHost && ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startGameBtn)) || IsKeyPressed(KEY_S))) {
+                    // 实际开始游戏（后续可接入网络同步）
+                    currentState = GameState::PLAYING;
+                    for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
+                    timerRunning = true;
+                }
+                if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backToModeBtn2)) || IsKeyPressed(KEY_BACKSPACE)) {
+                    currentState = GameState::MODE_SELECT;
+                    isHost = isGuest = false;
+                    multiSubState = MultiplayerSubState::LOBBY;
+                }
+                break;
 
         case GameState::PLAYING:
             if (IsKeyPressed(KEY_SPACE)) {
@@ -442,11 +607,6 @@ void Game::HandleInput(Vector2 mousePos) {
 
         case GameState::PAUSED:
             if (IsKeyPressed(KEY_SPACE) || (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn))) {
-                currentState = GameState::PLAYING;
-                timerRunning = true;
-            }
-            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn) || IsKeyPressed(KEY_SPACE)) && pauseCause == PauseCause::LIFE_LOSS_PAUSE) {
-                for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
                 currentState = GameState::PLAYING;
                 timerRunning = true;
             }
@@ -462,17 +622,43 @@ void Game::HandleInput(Vector2 mousePos) {
             break;
 
         case GameState::LEVEL_CLEAR:
-            // ... 原有处理 ...
+            if (IsKeyPressed(KEY_P) || (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, replayBtn))) {
+                LoadLevel(currentLevel);
+                for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
+                currentState = GameState::PLAYING;
+                timerRunning = true;
+            }
+            if (IsKeyPressed(KEY_G) || (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, goAheadBtn))) {
+                currentLevel++;
+                LoadLevel(currentLevel);
+                for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
+                currentState = GameState::PLAYING;
+                timerRunning = true;
+            }
             break;
 
         case GameState::VICTORY:
-            // ... 原有处理 ...
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, victoryRestartBtn)) || IsKeyPressed(KEY_R)) {
+                ResetGameState();
+                currentState = GameState::MODE_SELECT;
+                timerRunning = false;
+            }
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, victoryReplayBtn)) || IsKeyPressed(KEY_P)) {
+                LoadLevel(currentLevel);
+                for (auto& b : balls) b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
+                currentState = GameState::PLAYING;
+                timerRunning = true;
+            }
             break;
+
 
         case GameState::RANKING:
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtn)) || IsKeyPressed(KEY_B)) {
                 currentState = GameState::SINGLE_MENU;
             }
+            break;
+
+        default:
             break;
     }
 }
@@ -561,7 +747,7 @@ void Game::Update(float dt) {
     
     // ========== 性能测量起点 ==========
     double totalStart = GetTime();
-    
+    /*
     // 后门按键（不计入测量）
     if (IsKeyPressed(KEY_C)) {
         if (currentLevel == totalLevels - 1) {
@@ -581,7 +767,7 @@ void Game::Update(float dt) {
         AddVictoryRecord();
         for (auto& b : balls) b.SetSpeed({0, 0});
         return;
-    }
+    }*/
     
     // 1. 拖尾记录 + 球移动与边界/挡板碰撞 → 物理部分
     double physStart = GetTime();
@@ -687,7 +873,7 @@ void Game::Update(float dt) {
     // 7. 挡板移动
     if (IsKeyDown(KEY_LEFT)) paddle.MoveLeft(paddleMoveSpeed);
     if (IsKeyDown(KEY_RIGHT)) paddle.MoveRight(paddleMoveSpeed);
-
+/*
     // 8. 最后一块砖动画（略）
     int activeCount = 0;
     int lastActiveIdx = -1;
@@ -723,7 +909,7 @@ void Game::Update(float dt) {
         float newY = lastBrickStartRect.y + (lastBrickTargetRect.y - lastBrickStartRect.y) * t;
         b.SetRect({ newX, newY, newW, newH });
     }
-
+*/
     // 9. 红线碰撞检测
     CheckBallHitRedLine();
 
@@ -826,6 +1012,8 @@ void Game::Draw() {
             DrawText("ERASE (E)", eraseRankBtn.x + 20, eraseRankBtn.y + 15, 20, WHITE);
             DrawRectangleRec(backToModeBtn, CheckCollisionPointRec(GetMousePosition(), backToModeBtn) ? DARKGRAY : GRAY);
             DrawText("BACK", backToModeBtn.x + 35, backToModeBtn.y + 15, 20, WHITE);
+            DrawRectangleRec(continueGameBtn, CheckCollisionPointRec(GetMousePosition(), continueGameBtn) ? MAGENTA : PINK);
+            DrawText("CONTINUE (C)", continueGameBtn.x + 10, continueGameBtn.y + 15, 20, WHITE);
             if (showEraseHint) {
                 DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.5f));
                 const char* hintText = "RANKING HAS BEEN ERASED!";
@@ -916,6 +1104,11 @@ void Game::Draw() {
 
         default: break;
         }
+    if (editingMode)
+    {
+        DrawEditModeUI();
+    }
+    
     int fps = GetFPS();
     float frameTime = GetFrameTime() * 1000.0f; // 毫秒
     DrawText(TextFormat("FPS: %d", fps), GetScreenWidth() - 150, 10, 20, YELLOW);
@@ -926,9 +1119,11 @@ void Game::Draw() {
     DrawText(TextFormat("SP:   %.2fms", m_skillParticleTime * 1000), GetScreenWidth() - 150, 80, 18, GREEN);
     DrawText(TextFormat("Eff:  %.2fms", m_effectsTime * 1000), GetScreenWidth() - 150, 95, 18, GREEN);
     DrawText(TextFormat("Total:%.2fms", m_totalTime * 1000), GetScreenWidth() - 150, 110, 18, YELLOW);
+
+
 }
 
-void Game::LoadLevel(int index) {
+void Game::LoadLevel(int index, bool resetHearts) {
     if (index >= levelManager.GetLevelCount()) {
         currentState = GameState::VICTORY;
         timerRunning = false;
@@ -937,25 +1132,27 @@ void Game::LoadLevel(int index) {
     }
     currentLevel = index;
 
-    hearts = config["game"].value("initial_hearts", 3);
+    // 只有需要重置时才从配置读取初始生命值
+    if (resetHearts) {
+        hearts = config["game"].value("initial_hearts", 3);
+    }
 
     float brickWidth, startX;
     levelManager.LoadLevel(index, bricks, brickWidth, startX,
                            GetScreenWidth(), GetScreenHeight());
 
-    // ★ 清空球和拖尾，并重新添加一个球 + 拖尾
+    // 清空球和拖尾，重新添加一个球
     balls.clear();
     ballTrails.clear();
     Vector2 initPos = { (float)config["ball"]["init_x"], (float)config["ball"]["init_y"] };
     Vector2 initSpeed = { 0.0f, 0.0f };
     float initRadius = config["ball"]["radius"];
     balls.emplace_back(initPos, initSpeed, initRadius);
-    ballTrails.emplace_back(maxTrailLength);   // ★ 传入最大长度
+    ballTrails.emplace_back(maxTrailLength);
 
     skillBalls.clear();
     particleSystem.Clear();
 
-    // ★ 对象池预留空间
     skillBalls.reserve(20);
     balls.reserve(8);
 
@@ -972,17 +1169,17 @@ void Game::LoadLevel(int index) {
         ball.SetRadius(originalBallRadius);
     }
 
-    // 构建碰撞网格
     brickGrid.Build(bricks);
-    // 统计活跃砖块数量
     activeBrickCount = 0;
     for (const auto& b : bricks) {
         if (b.IsActive()) activeBrickCount++;
     }
 }
 
+
 void Game::CheckLevelTransition() {
     if (activeBrickCount == 0 && currentState == GameState::PLAYING) {
+        SaveGame();   // 保存当前进度（本关已完成）
         if (currentLevel + 1 < totalLevels) {
             currentState = GameState::LEVEL_CLEAR;
             soundManager.PlayLevelComplete();
@@ -993,6 +1190,8 @@ void Game::CheckLevelTransition() {
             soundManager.PlayGameVictory();
             AddVictoryRecord();
             for (auto& b : balls) b.SetSpeed({0, 0});
+            // ★ 胜利后删除存档，避免继续游戏
+            std::remove(saveFileName.c_str());
         }
     }
 }
@@ -1045,5 +1244,203 @@ void Game::AddVictoryRecord() {
 }
 
 void Game::StartSinglePlayer() {
-    currentState = GameState::SINGLE_MENU;
+    DeleteSaveFile();               // 清除旧存档
+    ResetGameState();               // 重置所有数据（此时 currentState 变为 MODE_SELECT）
+    currentState = GameState::PLAYING;   // 直接开始游戏
+    for (auto& b : balls) {
+        b.SetSpeed({ config["ball"]["speed_x"], config["ball"]["speed_y"] });
+    }
+    timerRunning = true;
+}
+
+void Game::ToggleEditMode() {
+    editingMode = !editingMode;
+    if (editingMode) {
+        // 进入编辑模式时，暂停游戏（如果正在游戏中）
+        if (currentState == GameState::PLAYING) {
+            currentState = GameState::PAUSED;
+            timerRunning = false;
+        }
+        // 可选：保存一份原始砖块备份，以便取消编辑时恢复
+    } else {
+        // 退出编辑模式，恢复游戏状态（如果是暂停状态）
+        if (currentState == GameState::PAUSED && pauseCause == PauseCause::MANUAL_PAUSE) {
+            currentState = GameState::PLAYING;
+            timerRunning = true;
+        }
+    }
+}
+
+void Game::HandleEditModeInput() {
+    Vector2 mousePos = GetMousePosition();
+    
+    // 切换砖块类型（数字键 1-5）
+    if (IsKeyPressed(KEY_ONE)) selectedBrickType = 1;
+    if (IsKeyPressed(KEY_TWO)) selectedBrickType = 2;
+    if (IsKeyPressed(KEY_THREE)) selectedBrickType = 3;
+    if (IsKeyPressed(KEY_FOUR)) selectedBrickType = 4;
+    if (IsKeyPressed(KEY_FIVE)) selectedBrickType = 5;
+    
+    // 获取当前关卡的固定配置（不依赖现有砖块）
+    const LevelConfig& cfg = levelManager.GetCurrentConfig();
+    float brickWidth = (GetScreenWidth() - 2 * cfg.margin - (cfg.cols - 1) * cfg.spacing) / cfg.cols;
+    float startX = (GetScreenWidth() - (cfg.cols * brickWidth + (cfg.cols - 1) * cfg.spacing)) / 2.0f;
+    float brickHeight = cfg.brickHeight;
+    float startY = cfg.startY;
+    float spacing = cfg.spacing;
+    
+    // ----- 添加砖块（左键）：基于网格行列 -----
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        int col = (int)((mousePos.x - startX) / (brickWidth + spacing));
+        int row = (int)((mousePos.y - startY) / (brickHeight + spacing));
+        if (col >= 0 && col < cfg.cols && row >= 0 && row < cfg.rows) {
+            // 计算该格子的矩形
+            Rectangle targetRect = {
+                startX + col * (brickWidth + spacing),
+                startY + row * (brickHeight + spacing),
+                brickWidth,
+                brickHeight
+            };
+            // 检查是否已有砖块（通过矩形重叠）
+            bool exists = false;
+            for (const auto& brick : bricks) {
+                if (brick.IsActive() && CheckCollisionRecs(brick.GetRectangle(), targetRect)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                bricks.emplace_back(targetRect.x, targetRect.y, brickWidth, brickHeight, selectedBrickType);
+                brickGrid.Build(bricks);
+                activeBrickCount++;
+            }
+        }
+    }
+    
+    // ----- 删除砖块（右键）：直接基于鼠标位置与砖块矩形碰撞 -----
+    if (IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) {
+        for (auto it = bricks.begin(); it != bricks.end(); ) {
+            if (it->IsActive() && CheckCollisionPointRec(mousePos, it->GetRectangle())) {
+                it = bricks.erase(it);
+                activeBrickCount--;
+            } else {
+                ++it;
+            }
+        }
+        brickGrid.Build(bricks);
+    }
+    
+    // 保存布局（按 S 键）
+    if (IsKeyPressed(KEY_S)) {
+        SaveCurrentLayoutToJSON();
+        showEraseHint = true;
+        eraseHintTimer = 2.0f;
+    }
+}  
+
+void Game::SaveCurrentLayoutToJSON() {
+    const LevelConfig& cfg = levelManager.GetCurrentConfig();
+    int rows = cfg.rows;
+    int cols = cfg.cols;
+    float brickWidth = (GetScreenWidth() - 2 * cfg.margin - (cols - 1) * cfg.spacing) / cols;
+    float startX = (GetScreenWidth() - (cols * brickWidth + (cols - 1) * cfg.spacing)) / 2.0f;
+    float brickHeight = cfg.brickHeight;
+    float startY = cfg.startY;
+    float spacing = cfg.spacing;
+    
+    // 构建 layout 二维数组（初始为 0）
+    json layout = json::array();
+    for (int r = 0; r < rows; ++r) {
+        json row = json::array();
+        for (int c = 0; c < cols; ++c) {
+            row.push_back(0);
+        }
+        layout.push_back(row);
+    }
+    
+    // 遍历现有砖块，填充 layout
+    for (const auto& brick : bricks) {
+        if (!brick.IsActive()) continue;
+        Rectangle rect = brick.GetRectangle();
+        int col = (int)((rect.x - startX) / (brickWidth + spacing));
+        int row = (int)((rect.y - startY) / (brickHeight + spacing));
+        if (col >= 0 && col < cols && row >= 0 && row < rows) {
+            layout[row][col] = brick.GetMaxHealth();
+        }
+    }
+    
+    // 读取现有配置文件
+    json fullConfig;
+    std::ifstream inFile("config.json");
+    if (inFile.is_open()) {
+        inFile >> fullConfig;
+        inFile.close();
+    }
+    
+    if (!fullConfig.contains("levels") || !fullConfig["levels"].is_array()) {
+        fullConfig["levels"] = json::array();
+    }
+    int levelIndex = currentLevel;
+    if (levelIndex >= (int)fullConfig["levels"].size()) {
+        json newLevel = {
+            {"rows", rows},
+            {"cols", cols},
+            {"brick_height", brickHeight},
+            {"spacing", spacing},
+            {"start_y", startY},
+            {"margin", cfg.margin},
+            {"layout", layout}
+        };
+        fullConfig["levels"].push_back(newLevel);
+    } else {
+        fullConfig["levels"][levelIndex]["layout"] = layout;
+        // 自动生成 health_map
+        std::set<int> healthValues;
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                int val = layout[r][c];
+                if (val > 0) healthValues.insert(val);
+            }
+        }
+        json healthMap;
+        for (int val : healthValues) {
+            healthMap[std::to_string(val)] = val;
+        }
+        fullConfig["levels"][levelIndex]["health_map"] = healthMap;
+    }
+    
+    std::ofstream outFile("config.json");
+    if (outFile.is_open()) {
+        outFile << fullConfig.dump(4);
+        outFile.close();
+        std::cout << "Layout saved to config.json for level " << currentLevel << std::endl;
+    } else {
+        std::cerr << "Failed to save config.json" << std::endl;
+    }
+}
+
+void Game::DrawEditModeUI() {
+    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.4f));
+    
+    const LevelConfig& cfg = levelManager.GetCurrentConfig();
+    float brickWidth = (GetScreenWidth() - 2 * cfg.margin - (cfg.cols - 1) * cfg.spacing) / cfg.cols;
+    float startX = (GetScreenWidth() - (cfg.cols * brickWidth + (cfg.cols - 1) * cfg.spacing)) / 2.0f;
+    float brickHeight = cfg.brickHeight;
+    float startY = cfg.startY;
+    float spacing = cfg.spacing;
+    
+    // 垂直网格线
+    for (int c = 0; c <= cfg.cols; ++c) {
+        float x = startX + c * (brickWidth + spacing);
+        DrawLine(x, 0, x, GetScreenHeight(), GRAY);
+    }
+    // 水平网格线
+    for (int r = 0; r <= cfg.rows; ++r) {
+        float y = startY + r * (brickHeight + spacing);
+        DrawLine(0, y, GetScreenWidth(), y, GRAY);
+    }
+    
+    DrawText(TextFormat("Selected Type: %d (1-5)", selectedBrickType), 10, GetScreenHeight() - 80, 20, YELLOW);
+    DrawText("Left Click: Add Brick | Right Click: Delete Brick | S: Save | E: Exit", 10, GetScreenHeight() - 50, 20, WHITE);
+    DrawText("EDIT MODE", GetScreenWidth() - 150, 10, 30, RED);
 }

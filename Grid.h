@@ -3,6 +3,7 @@
 
 #include "Brick.h"
 #include <vector>
+#include <unordered_map>
 
 class Grid {
 public:
