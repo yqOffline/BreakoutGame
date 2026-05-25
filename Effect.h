@@ -1,3 +1,4 @@
+// Effect.h (完整文件)
 #ifndef EFFECT_H
 #define EFFECT_H
 
@@ -29,12 +30,15 @@ public:
     float GetRemainingTime() const { return timer; }
     const std::string& GetName() const { return name; }
     
+    // ★ 新增：允许外部设置剩余时间（用于网络同步）
+    void SetRemainingTime(float t) { timer = t; }
+    
 protected:
     float timer;
     std::string name;
 };
 
-// 各具体效果类需实现 GetType()
+// 以下各具体效果类保持不变...
 class PaddleExtendEffect : public Effect {
 public:
     PaddleExtendEffect(float duration, float factor);

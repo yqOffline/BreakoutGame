@@ -433,7 +433,7 @@ void VersusGame::UpdateVisuals(float dt) {
 }
 
 GameStateSnapshot VersusGame::GetSnapshot() const {
-    GameStateSnapshot snap;
+    GameStateSnapshot snap{};
     snap.ballX = ball.GetPosition().x;
     snap.ballY = ball.GetPosition().y;
     snap.ballSpeedX = ball.GetSpeed().x;
@@ -447,16 +447,53 @@ GameStateSnapshot VersusGame::GetSnapshot() const {
     snap.ballB = ballColor.b;
     snap.ballA = ballColor.a;
     snap.ballAttached = waitingForLaunch ? (ballAttachedToUpper ? 1 : 2) : 0;
-    snap.hostGameTime = m_gameTimer;   // 新增：主机时间戳
+    snap.brickActiveBits = 0;
+    for (size_t i = 0; i < bricks.size() && i < 32; ++i)
+        if (bricks[i].IsActive()) snap.brickActiveBits |= (1u << i);
+    snap.hostGameTime = m_gameTimer;
 
-    uint32_t bits = 0;
-    for (size_t i = 0; i < bricks.size(); ++i)
-        if (bricks[i].IsActive()) bits |= (1u << i);
-    snap.brickActiveBits = bits;
+    // 序列化上玩家效果
+    int idx = 0;
+    for (const auto& eff : upperEffects) {
+        if (idx >= MAX_EFFECTS_PER_PLAYER) break;
+        snap.upperEffectRemaining[idx] = eff->GetRemainingTime();
+        snap.upperEffectTypes[idx] = static_cast<uint8_t>(eff->GetType());
+        ++idx;
+    }
+    for (; idx < MAX_EFFECTS_PER_PLAYER; ++idx) {
+        snap.upperEffectRemaining[idx] = 0.0f;
+        snap.upperEffectTypes[idx] = 0;
+    }
+
+    // 下玩家效果
+    idx = 0;
+    for (const auto& eff : lowerEffects) {
+        if (idx >= MAX_EFFECTS_PER_PLAYER) break;
+        snap.lowerEffectRemaining[idx] = eff->GetRemainingTime();
+        snap.lowerEffectTypes[idx] = static_cast<uint8_t>(eff->GetType());
+        ++idx;
+    }
+    for (; idx < MAX_EFFECTS_PER_PLAYER; ++idx) {
+        snap.lowerEffectRemaining[idx] = 0.0f;
+        snap.lowerEffectTypes[idx] = 0;
+    }
+
+    // 技能球
+    snap.skillBallCount = std::min((int32_t)skillBalls.size(), MAX_SKILLBALLS);
+    for (int i = 0; i < snap.skillBallCount; ++i) {
+        const auto& sb = skillBalls[i];
+        snap.skillBalls[i].x = sb.GetPosition().x;
+        snap.skillBalls[i].y = sb.GetPosition().y;
+        snap.skillBalls[i].speedX = sb.GetSpeed().x;
+        snap.skillBalls[i].speedY = sb.GetSpeed().y;
+        snap.skillBalls[i].skillType = static_cast<uint8_t>(sb.skillType);
+        snap.skillBalls[i].active = sb.active ? 1 : 0;
+    }
+
     return snap;
 }
-
 void VersusGame::ApplySnapshot(const GameStateSnapshot& snap) {
+    // 基础状态
     ball.SetPosition({ snap.ballX, snap.ballY });
     ball.SetSpeed({ snap.ballSpeedX, snap.ballSpeedY });
     upperPaddle.SetPosition(snap.upperPaddleX, upperPaddle.GetRectangle().y);
@@ -468,43 +505,34 @@ void VersusGame::ApplySnapshot(const GameStateSnapshot& snap) {
     ballAttachedToUpper = (snap.ballAttached == 1);
     ballOwnedByUpper = ballAttachedToUpper;
 
-    for (size_t i = 0; i < bricks.size(); ++i)
+    // 砖块状态
+    for (size_t i = 0; i < bricks.size(); ++i) {
         bricks[i].SetActive((snap.brickActiveBits & (1u << i)) != 0);
-
-    if (snap.ballAttached != 0) {
-        ballTrails[0].clear();
-        ballTrails[0].push_back({ snap.ballX, snap.ballY });
-    } else {
-        bool shouldAdd = false;
-        if (ballTrails[0].empty()) {
-            shouldAdd = true;
-        } else {
-            Vector2 last = ballTrails[0].back();
-            float dx = snap.ballX - last.x;
-            float dy = snap.ballY - last.y;
-            if (dx*dx + dy*dy > 16.0f) {
-                shouldAdd = true;
-            }
-        }
-        if (shouldAdd) {
-            ballTrails[0].push_back({ snap.ballX, snap.ballY });
-        }
-        while ((int)ballTrails[0].size() > maxTrailLength)
-            ballTrails[0].pop_front();
     }
+
+    // 同步效果和技能球
+    ApplyEffectsAndSkillBalls(snap);
+
+    // 拖尾重置
+    ballTrails[0].clear();
+    ballTrails[0].push_back({ snap.ballX, snap.ballY });
 }
 
 void VersusGame::ApplyInterpolatedState(const GameStateSnapshot& prev, const GameStateSnapshot& next, float t) {
-    // 仅更新渲染所需的位置和颜色，不改变游戏逻辑状态
+    // 球的位置插值
     float lerpX = prev.ballX + (next.ballX - prev.ballX) * t;
     float lerpY = prev.ballY + (next.ballY - prev.ballY) * t;
     ball.SetPosition({ lerpX, lerpY });
+    // 球的速度不插值，直接使用 next 值
+    ball.SetSpeed({ next.ballSpeedX, next.ballSpeedY });
 
+    // 挡板位置插值
     float upperX = prev.upperPaddleX + (next.upperPaddleX - prev.upperPaddleX) * t;
     float lowerX = prev.lowerPaddleX + (next.lowerPaddleX - prev.lowerPaddleX) * t;
     upperPaddle.SetPosition(upperX, upperPaddle.GetRectangle().y);
     lowerPaddle.SetPosition(lowerX, lowerPaddle.GetRectangle().y);
 
+    // 颜色插值
     Color prevCol = { prev.ballR, prev.ballG, prev.ballB, prev.ballA };
     Color nextCol = { next.ballR, next.ballG, next.ballB, next.ballA };
     ballColor = {
@@ -514,15 +542,9 @@ void VersusGame::ApplyInterpolatedState(const GameStateSnapshot& prev, const Gam
         (unsigned char)(prevCol.a + (nextCol.a - prevCol.a) * t)
     };
 
-    // 拖尾简单处理：使用最新快照的拖尾逻辑
-    if ((prev.ballAttached != 0) || (next.ballAttached != 0)) {
-        ballTrails[0].clear();
-        ballTrails[0].push_back({ lerpX, lerpY });
-    } else {
-        ballTrails[0].push_back({ lerpX, lerpY });
-        while ((int)ballTrails[0].size() > maxTrailLength)
-            ballTrails[0].pop_front();
-    }
+    // 拖尾简单处理：清空并加入当前位置（避免拖尾断裂）
+    ballTrails[0].clear();
+    ballTrails[0].push_back({ lerpX, lerpY });
 }
 
 void VersusGame::Draw() {
@@ -576,3 +598,78 @@ void VersusGame::Draw() {
         y -= 20;
     }
 }
+
+void VersusGame::ApplyEffectsAndSkillBalls(const GameStateSnapshot& snap) {
+    // 1. 重建上玩家效果列表（仅保存，不调用 Apply）
+    upperEffects.clear();
+    for (int i = 0; i < MAX_EFFECTS_PER_PLAYER; ++i) {
+        if (snap.upperEffectRemaining[i] > 0.0f) {
+            EffectType type = static_cast<EffectType>(snap.upperEffectTypes[i]);
+            auto effect = EffectFactory::CreateEffect(static_cast<SkillType>(type));
+            if (effect) {
+                effect->SetRemainingTime(snap.upperEffectRemaining[i]);
+                upperEffects.push_back(std::move(effect));
+            }
+        }
+    }
+
+    // 2. 重建下玩家效果列表
+    lowerEffects.clear();
+    for (int i = 0; i < MAX_EFFECTS_PER_PLAYER; ++i) {
+        if (snap.lowerEffectRemaining[i] > 0.0f) {
+            EffectType type = static_cast<EffectType>(snap.lowerEffectTypes[i]);
+            auto effect = EffectFactory::CreateEffect(static_cast<SkillType>(type));
+            if (effect) {
+                effect->SetRemainingTime(snap.lowerEffectRemaining[i]);
+                lowerEffects.push_back(std::move(effect));
+            }
+        }
+    }
+
+    // 3. 重新计算板宽和球半径（与 UpdateEffects 中的逻辑相同）
+    float upperWidthMult = 1.0f, lowerWidthMult = 1.0f;
+    float upperBallMult = 1.0f, lowerBallMult = 1.0f;
+    for (const auto& eff : upperEffects) {
+        switch (eff->GetType()) {
+            case EffectType::PaddleExtend: upperWidthMult = std::max(upperWidthMult, 1.5f); break;
+            case EffectType::BallEnlarge:  upperBallMult = std::max(upperBallMult, 1.5f); break;
+            case EffectType::BallShrink:   upperBallMult = std::min(upperBallMult, 0.7f); break;
+            default: break;
+        }
+    }
+    for (const auto& eff : lowerEffects) {
+        switch (eff->GetType()) {
+            case EffectType::PaddleExtend: lowerWidthMult = std::max(lowerWidthMult, 1.5f); break;
+            case EffectType::BallEnlarge:  lowerBallMult = std::max(lowerBallMult, 1.5f); break;
+            case EffectType::BallShrink:   lowerBallMult = std::min(lowerBallMult, 0.7f); break;
+            default: break;
+        }
+    }
+    upperPaddle.SetWidth(originalUpperPaddleWidth * upperWidthMult);
+    lowerPaddle.SetWidth(originalLowerPaddleWidth * lowerWidthMult);
+    float ballMult = ballOwnedByUpper ? upperBallMult : lowerBallMult;
+    ball.SetRadius(originalBallRadius * ballMult);
+
+    // 4. 重建技能球列表
+    skillBalls.clear();
+    for (int i = 0; i < snap.skillBallCount; ++i) {
+        const auto& sbd = snap.skillBalls[i];
+        if (sbd.active) {
+            SkillType type = static_cast<SkillType>(sbd.skillType);
+            Vector2 pos = { sbd.x, sbd.y };
+            Vector2 speed = { sbd.speedX, sbd.speedY };
+            Color glow;
+            switch (type) {
+                case SkillType::PADDLE_EXTEND: glow = BLUE; break;
+                case SkillType::BALL_ENLARGE:  glow = GREEN; break;
+                case SkillType::BALL_SHRINK:   glow = RED; break;
+                case SkillType::EXPLOSION:     glow = ORANGE; break;
+                case SkillType::INVINCIBLE:    glow = GOLD; break;
+                case SkillType::SPLIT:         glow = SKYBLUE; break;
+                default: glow = WHITE;
+            }
+            skillBalls.emplace_back(pos, type, skillBallRadius, speed, glow);
+        }
+    }
+}
+

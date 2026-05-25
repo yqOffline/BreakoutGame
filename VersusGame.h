@@ -32,11 +32,14 @@ public:
 
     GameStateSnapshot GetSnapshot() const;
     void ApplySnapshot(const GameStateSnapshot& snap);
-    void ApplyInterpolatedState(const GameStateSnapshot& prev, const GameStateSnapshot& next, float t);  // 新增：插值更新
-
+    void ApplyInterpolatedState(const GameStateSnapshot& prev, const GameStateSnapshot& next, float t);
+    
+    // 离散同步效果和技能球（仅保留一次声明）
+    void ApplyEffectsAndSkillBalls(const GameStateSnapshot& snap);
+    
     void ApplyEffectToPlayer(std::unique_ptr<Effect> effect, bool upper);
     void UpdateEffects(float dt);
-    void UpdateVisuals(float dt);        // 客户机端更新视觉元素（技能球、粒子、拖尾裁剪）
+    void UpdateVisuals(float dt);
 
     int GetUpperLives() const { return upperLives; }
     int GetLowerLives() const { return lowerLives; }
@@ -75,7 +78,7 @@ private:
     int upperLives, lowerLives;
     bool waitingForLaunch;
     bool ballAttachedToUpper;
-    bool ballOwnedByUpper;               // 记录球当前归属的Paddle
+    bool ballOwnedByUpper;
 
     std::vector<std::unique_ptr<Effect>> upperEffects;
     std::vector<std::unique_ptr<Effect>> lowerEffects;
@@ -96,7 +99,7 @@ private:
     SoundManager soundManager;
     std::mt19937 rng;
 
-    float m_gameTimer = 0.0f;            // 新增：内部游戏计时器（秒），仅在主机端递增
+    float m_gameTimer = 0.0f;
 
     void HandleBallEdgeBounce();
     void HandlePaddleCollision(Paddle& paddle, bool isUpper);

@@ -442,5 +442,8 @@ void VersusManager::ApplyInterpolation(float renderTime) {
         if (t < 0.0f) t = 0.0f;
         if (t > 1.0f) t = 1.0f;
     }
+    // 1. 插值几何属性
     game.ApplyInterpolatedState(*prev, *next, t);
+    // 2. 离散同步效果和技能球（使用最新的 next 快照）
+    game.ApplyEffectsAndSkillBalls(*next);
 }
