@@ -2,6 +2,7 @@
 #include "game.h"
 #include "RaceManager.h"
 #include "VersusManager.h"
+#include "TextureCache.h"
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -59,6 +60,7 @@ int main(int argc, char* argv[]) {
             singleGame->Update(GetFrameTime());
 
             BeginDrawing();
+            TextureCache::Instance().UploadPendingTextures(); 
             ClearBackground(RAYWHITE);
             singleGame->Draw();
             EndDrawing();
@@ -159,6 +161,7 @@ int main(int argc, char* argv[]) {
                 raceManager->Update(GetFrameTime());
 
                 BeginDrawing();
+                TextureCache::Instance().UploadPendingTextures(); 
                 ClearBackground(RAYWHITE);
                 raceManager->Draw();
                 EndDrawing();
@@ -255,6 +258,7 @@ int main(int argc, char* argv[]) {
                 versusManager->Update(GetFrameTime());
 
                 BeginDrawing();
+                TextureCache::Instance().UploadPendingTextures(); 
                 ClearBackground(RAYWHITE);
                 versusManager->Draw();
                 EndDrawing();

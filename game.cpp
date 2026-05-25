@@ -111,6 +111,7 @@ Game::Game(int screenWidth, int screenHeight)
     victoryReplayBtn  = { (float)screenWidth / 2 + 10,  (float)screenHeight / 2 + 40, 120, 50 };
     backBtn = { (float)screenWidth / 2 - 60, (float)screenHeight - 80, 120, 50 };
     continueGameBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 - 170, 120, 50 };
+    quitBtn = { (float)screenWidth / 2 - 60, (float)screenHeight / 2 + 50, 120, 50 };
 
     // 9. 加载纹理（使用 TextureCache 单例）
     backgroundTex = TextureCache::Instance().GetTexture("1.png");
@@ -153,6 +154,15 @@ void Game::SaveGame() {
     data.gameTimer = gameTimer;
     data.totalDeaths = totalDeaths;
 
+    // 保存所有球
+    for (const auto& ball : balls) {
+        data.ballPosX.push_back(ball.GetPosition().x);
+        data.ballPosY.push_back(ball.GetPosition().y);
+        data.ballSpeedX.push_back(ball.GetSpeed().x);
+        data.ballSpeedY.push_back(ball.GetSpeed().y);
+        data.ballRadius.push_back(ball.GetRadius());
+    }
+
     json saveJson;
     saveJson["version"] = data.version;
     saveJson["current_level"] = data.currentLevel;
@@ -160,12 +170,16 @@ void Game::SaveGame() {
     saveJson["hearts"] = data.hearts;
     saveJson["game_timer"] = data.gameTimer;
     saveJson["total_deaths"] = data.totalDeaths;
+    saveJson["ball_pos_x"] = data.ballPosX;
+    saveJson["ball_pos_y"] = data.ballPosY;
+    saveJson["ball_speed_x"] = data.ballSpeedX;
+    saveJson["ball_speed_y"] = data.ballSpeedY;
+    saveJson["ball_radius"] = data.ballRadius;
 
     std::ofstream file(saveFileName);
     if (file.is_open()) {
-        file << saveJson.dump(4); // 格式化输出
-        file.close();
-        std::cout << "Game saved." << std::endl;
+        file << saveJson.dump(4);
+        std::cout << "Game saved. Level=" << currentLevel << " Balls=" << balls.size() << std::endl;
     } else {
         std::cerr << "Failed to save game!" << std::endl;
     }
@@ -174,51 +188,54 @@ void Game::SaveGame() {
 bool Game::LoadGame() {
     std::ifstream file(saveFileName);
     if (!file.is_open()) {
+        std::cout << "No save file found." << std::endl;
         return false;
     }
+
     json saveJson;
     try {
         file >> saveJson;
+        int version = saveJson.value("version", 0);
+        if (version != 1) {
+            std::cerr << "Save version incompatible!" << std::endl;
+            return false;
+        }
+        currentLevel = saveJson.value("current_level", 0);
+        score = saveJson.value("score", 0);
+        hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
+        gameTimer = saveJson.value("game_timer", 0.0f);
+        totalDeaths = saveJson.value("total_deaths", 0);
     } catch (const json::parse_error& e) {
         std::cerr << "Save file parse error: " << e.what() << std::endl;
         return false;
     }
 
-    // 版本检查与兼容
-    int version = saveJson.value("version", 0);
-    if (version == 0) {
-        // 旧版存档（无version字段），尝试按旧格式读取
-        std::cout << "Detected old save format, attempting to load..." << std::endl;
-        currentLevel = saveJson.value("current_level", 0);
-        score = saveJson.value("score", 0);
-        hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
-        gameTimer = saveJson.value("game_timer", 0.0f);
-        totalDeaths = saveJson.value("total_deaths", 0);
-        // 立即保存为新版本
-        SaveGame();
-    } else if (version == 1) {
-        currentLevel = saveJson.value("current_level", 0);
-        score = saveJson.value("score", 0);
-        hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
-        gameTimer = saveJson.value("game_timer", 0.0f);
-        totalDeaths = saveJson.value("total_deaths", 0);
-    } else {
-        std::cerr << "Unsupported save version: " << version << std::endl;
-        return false;
+    // 加载关卡（会重置砖块和初始球）
+    LoadLevel(currentLevel, false);
+    hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
+
+    // 读取保存的球数据
+    std::vector<float> posX = saveJson.value("ball_pos_x", std::vector<float>());
+    std::vector<float> posY = saveJson.value("ball_pos_y", std::vector<float>());
+    std::vector<float> spdX = saveJson.value("ball_speed_x", std::vector<float>());
+    std::vector<float> spdY = saveJson.value("ball_speed_y", std::vector<float>());
+    std::vector<float> radii = saveJson.value("ball_radius", std::vector<float>());
+
+    if (!posX.empty()) {
+        // 清空 LoadLevel 生成的默认球
+        balls.clear();
+        ballTrails.clear();
+        for (size_t i = 0; i < posX.size(); ++i) {
+            Vector2 pos = { posX[i], posY[i] };
+            Vector2 sp = { spdX[i], spdY[i] };
+            float r = (i < radii.size()) ? radii[i] : originalBallRadius;
+            balls.emplace_back(pos, sp, r);
+            ballTrails.emplace_back(maxTrailLength);
+        }
     }
 
-    // 加载对应关卡（会重置砖块、球等）
-    LoadLevel(currentLevel, false);  // 不重置 hearts
-    // 覆盖 hearts 为存档值
-    hearts = saveJson.value("hearts", config["game"]["initial_hearts"]);
-    // 确保球为静止状态（附着在挡板）
-    for (auto& ball : balls) {
-        ball.SetSpeed({0, 0});
-    }
-    // 设置游戏状态为暂停，等待玩家按空格或继续按钮
-    currentState = GameState::PAUSED;
-    pauseCause = PauseCause::MANUAL_PAUSE;
-    timerRunning = false;
+    timerRunning = true;
+    currentState = GameState::PLAYING;
     return true;
 }
 
@@ -606,12 +623,21 @@ void Game::HandleInput(Vector2 mousePos) {
             break;
 
         case GameState::PAUSED:
+            // Continue 按钮（恢复游戏）
             if (IsKeyPressed(KEY_SPACE) || (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, continueBtn))) {
                 currentState = GameState::PLAYING;
                 timerRunning = true;
             }
+            // Restart 按钮（重置为新游戏）
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)) || IsKeyPressed(KEY_R)) {
-                ResetGame();
+                StartSinglePlayer();   // 清除存档，重置状态，并直接开始新游戏
+            }
+            // Quit 按钮（保存进度并退出到主菜单）
+            if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, quitBtn)) || IsKeyPressed(KEY_Q)) {
+                SaveGame();            // 保存当前进度
+                currentState = GameState::MODE_SELECT;
+                timerRunning = false;
+                // 可选：暂停背景音乐等
             }
             break;
 
@@ -1053,10 +1079,17 @@ void Game::Draw() {
 
         case GameState::PAUSED:
             DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.7f));
+            
             DrawRectangleRec(continueBtn, CheckCollisionPointRec(GetMousePosition(), continueBtn) ? DARKBLUE : BLUE);
             DrawText("CONTINUE", continueBtn.x + 15, continueBtn.y + 15, 20, BLACK);
+            
             DrawRectangleRec(restartBtn, CheckCollisionPointRec(GetMousePosition(), restartBtn) ? MAROON : RED);
             DrawText("RESTART", restartBtn.x + 20, restartBtn.y + 15, 20, BLACK);
+            
+            // 新增 Quit 按钮
+            DrawRectangleRec(quitBtn, CheckCollisionPointRec(GetMousePosition(), quitBtn) ? DARKGRAY : GRAY);
+            DrawText("QUIT (Q)", quitBtn.x + 25, quitBtn.y + 15, 20, WHITE);
+            
             DrawText("PAUSED", GetScreenWidth() / 2 - 60, GetScreenHeight() / 2 - 80, 40, WHITE);
             break;
 

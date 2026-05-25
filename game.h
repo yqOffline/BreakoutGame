@@ -86,6 +86,10 @@ struct SaveData {
     int hearts = 0;
     float gameTimer = 0.0f;
     int totalDeaths = 0;
+    // 新增：保存所有球的位置和速度
+    std::vector<float> ballPosX, ballPosY;
+    std::vector<float> ballSpeedX, ballSpeedY;
+    std::vector<float> ballRadius;   // 可选，用于恢复大小效果
 };
 
 class Game {
@@ -105,7 +109,7 @@ private:
     Rectangle redLine;
     Rectangle singleBtn, raceBtn, versusBtn, startBtn, rankBtn, eraseRankBtn;
     Rectangle backToModeBtn, hostBtn, guestBtn, startGameBtn, backToModeBtn2;
-    Rectangle continueBtn, restartBtn, gameOverRestartBtn, replayBtn, goAheadBtn;
+    Rectangle continueBtn, restartBtn, gameOverRestartBtn, replayBtn, goAheadBtn,quitBtn;
     Rectangle victoryRestartBtn, victoryReplayBtn, backBtn;
 
     // ---------- 新增：继续游戏按钮 ----------
