@@ -1,25 +1,10 @@
 #include "VersusManager.h"
 #include "TextureCache.h"
 #include "EffectFactory.h"
+#include "VersusNetMessage.h"
 #include <iostream>
 #include <cstring>
-#include <enet/enet.h>          // 只在 .cpp 中包含，不暴露到头文件
-
-// ---------- 序列化辅助 ----------
-template <typename T>
-static std::vector<uint8_t> PackData(const T& obj) {
-    std::vector<uint8_t> vec(sizeof(T));
-    std::memcpy(vec.data(), &obj, sizeof(T));
-    return vec;
-}
-
-template <typename T>
-static T UnpackData(const std::vector<uint8_t>& data) {
-    T obj{};
-    if (data.size() >= sizeof(T))
-        std::memcpy(&obj, data.data(), sizeof(T));
-    return obj;
-}
+#include <enet/enet.h>
 
 // ---------- 构造函数 ----------
 VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const std::string& ip, uint16_t port)
@@ -36,23 +21,27 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
     game.OnEffectRemoved = [this](EffectType t, bool up) { OnEffectRemoved(t, up); };
 
     game.OnSkillBallSpawned = [this](const SkillBall& sb) {
-        SkillBallSpawnMsg msg;
-        msg.type = VersusMsgType::SKILLBALL_SPAWN;
-        msg.posX = sb.GetPosition().x;
-        msg.posY = sb.GetPosition().y;
-        msg.speedY = sb.GetSpeed().y;
-        msg.skillType = (int32_t)sb.skillType;
-        SendMessage(PackData(msg), false);
+        SkillBallSpawnMsg spawnMsg;
+        spawnMsg.type = VersusMsgType::SKILLBALL_SPAWN;
+        spawnMsg.posX = sb.GetPosition().x;
+        spawnMsg.posY = sb.GetPosition().y;
+        spawnMsg.speedY = sb.GetSpeed().y;
+        spawnMsg.skillType = static_cast<int32_t>(sb.skillType);
+        SendMessage(Serialize(spawnMsg), false);
     };
 
     game.OnParticleSpawned = [this](Vector2 pos, Color col, int count, bool isBreak) {
-        ParticleSpawnMsg pmsg;
-        pmsg.type = VersusMsgType::PARTICLE_SPAWN;
-        pmsg.posX = pos.x; pmsg.posY = pos.y;
-        pmsg.r = col.r; pmsg.g = col.g; pmsg.b = col.b; pmsg.a = col.a;
-        pmsg.count = count;
-        pmsg.isBreak = isBreak ? 1 : 0;
-        SendMessage(PackData(pmsg), false);
+        ParticleSpawnMsg particleMsg;
+        particleMsg.type = VersusMsgType::PARTICLE_SPAWN;
+        particleMsg.posX = pos.x;
+        particleMsg.posY = pos.y;
+        particleMsg.r = col.r;
+        particleMsg.g = col.g;
+        particleMsg.b = col.b;
+        particleMsg.a = col.a;
+        particleMsg.count = count;
+        particleMsg.isBreak = isBreak ? 1 : 0;
+        SendMessage(Serialize(particleMsg), false);
     };
 
     game.LoadLevel(pendingSeed);
@@ -97,7 +86,8 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
                         isConnected = true;
                         if (asHost) {
                             VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
-                            ENetPacket* pkt = enet_packet_create(&seedMsg, sizeof(seedMsg), ENET_PACKET_FLAG_RELIABLE);
+                            auto data = Serialize(seedMsg);
+                            ENetPacket* pkt = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_RELIABLE);
                             enet_peer_send(peer, 0, pkt);
                         }
                         break;
@@ -113,7 +103,7 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
                     case ENET_EVENT_TYPE_DISCONNECT:
                         peer = nullptr;
                         isConnected = false;
-                        incomingQueue.push({});   // 空包表示断开
+                        incomingQueue.push({});
                         break;
 
                     default: break;
@@ -148,10 +138,9 @@ VersusManager::~VersusManager() {
     quitThread = true;
     if (networkThread.joinable())
         networkThread.join();
-
 }
 
-// ---------- 发送消息（主线程安全） ----------
+// ---------- 发送消息 ----------
 void VersusManager::SendMessage(const std::vector<uint8_t>& data, bool reliable) {
     if (!isConnected) return;
     outgoingQueue.push({data, reliable});
@@ -163,15 +152,15 @@ void VersusManager::SendGameState() {
         float roll = (float)(GetRandomValue(0, 1000)) / 1000.0f;
         if (roll < packetLossRate) return;
     }
-    SendMessage(PackData(snap), false);
+    auto data = Serialize(snap);
+    SendMessage(data, false);
 }
 
-// ---------- 主线程处理接收消息 ----------
+// ---------- 处理接收消息 ----------
 void VersusManager::ProcessIncomingMessages() {
     std::vector<uint8_t> data;
     while (incomingQueue.try_pop(data)) {
         if (data.empty()) {
-            // 断开连接信号
             if (!drawResult) {
                 drawResult = true;
                 resultText = isHost ? "YOU WIN! OPPONENT LEFT" : "CONNECTION LOST";
@@ -183,79 +172,79 @@ void VersusManager::ProcessIncomingMessages() {
     }
 }
 
-// ---------- 解析并处理收到的数据包 ----------
 void VersusManager::HandleIncomingPacket(const std::vector<uint8_t>& data) {
-    if (data.size() == sizeof(GameStateSnapshot)) {
+    // 尝试反序列化为 GameStateSnapshot
+    GameStateSnapshot snap;
+    if (Deserialize(data.data(), data.size(), snap)) {
         if (!isHost) {
-            GameStateSnapshot snap = UnpackData<GameStateSnapshot>(data);
             AddSnapshotToBuffer(snap);
         }
         return;
     }
-    if (data.size() == sizeof(SkillBallSpawnMsg)) {
-        SkillBallSpawnMsg smsg = UnpackData<SkillBallSpawnMsg>(data);
-        if (smsg.type == VersusMsgType::SKILLBALL_SPAWN) {
-            SkillType type = static_cast<SkillType>(smsg.skillType);
-            Vector2 pos = { smsg.posX, smsg.posY };
-            Vector2 velocity = { 0.0f, smsg.speedY };
-            float radius = config["skill_ball"]["radius"].get<float>();
-            Color glow;
-            switch (type) {
-                case SkillType::PADDLE_EXTEND: glow = BLUE; break;
-                case SkillType::BALL_ENLARGE:  glow = GREEN; break;
-                case SkillType::BALL_SHRINK:   glow = RED; break;
-                case SkillType::EXPLOSION:     glow = ORANGE; break;
-                case SkillType::INVINCIBLE:    glow = GOLD; break;
-                case SkillType::SPLIT:         glow = SKYBLUE; break;
-                default: glow = WHITE; break;
-            }
-            SkillBall sb(pos, type, radius, velocity, glow);
-            game.AddSkillBall(sb);
+    // 尝试反序列化为 SkillBallSpawnMsg
+    SkillBallSpawnMsg smsg;
+    if (Deserialize(data.data(), data.size(), smsg) && smsg.type == VersusMsgType::SKILLBALL_SPAWN) {
+        SkillType type = static_cast<SkillType>(smsg.skillType);
+        Vector2 pos = { smsg.posX, smsg.posY };
+        Vector2 velocity = { 0.0f, smsg.speedY };
+        float radius = config["skill_ball"]["radius"].get<float>();
+        Color glow;
+        switch (type) {
+            case SkillType::PADDLE_EXTEND: glow = BLUE; break;
+            case SkillType::BALL_ENLARGE:  glow = GREEN; break;
+            case SkillType::BALL_SHRINK:   glow = RED; break;
+            case SkillType::EXPLOSION:     glow = ORANGE; break;
+            case SkillType::INVINCIBLE:    glow = GOLD; break;
+            case SkillType::SPLIT:         glow = SKYBLUE; break;
+            default: glow = WHITE;
         }
+        SkillBall sb(pos, type, radius, velocity, glow);
+        game.AddSkillBall(sb);
         return;
     }
-    if (data.size() == sizeof(ParticleSpawnMsg)) {
-        ParticleSpawnMsg pmsg = UnpackData<ParticleSpawnMsg>(data);
-        if (pmsg.type == VersusMsgType::PARTICLE_SPAWN) {
-            Vector2 pos = { pmsg.posX, pmsg.posY };
-            Color col = { pmsg.r, pmsg.g, pmsg.b, pmsg.a };
-            game.GetParticleSystem().EmitExplosion(pos, col, pmsg.count);
-        }
+    // 尝试反序列化为 ParticleSpawnMsg
+    ParticleSpawnMsg pmsg;
+    if (Deserialize(data.data(), data.size(), pmsg) && pmsg.type == VersusMsgType::PARTICLE_SPAWN) {
+        Vector2 pos = { pmsg.posX, pmsg.posY };
+        Color col = { pmsg.r, pmsg.g, pmsg.b, pmsg.a };
+        game.GetParticleSystem().EmitExplosion(pos, col, pmsg.count);
         return;
     }
-    if (data.size() != sizeof(VersusNetMessage)) return;
-    VersusNetMessage msg = UnpackData<VersusNetMessage>(data);
-
-    switch (msg.type) {
-        case VersusMsgType::SEED:
-            if (!isHost) game.LoadLevel((unsigned int)msg.data1);
-            break;
-        case VersusMsgType::INPUT: {
-            int dir = msg.data1;
-            bool launch = (msg.data2 != 0);
-            if (isHost) {
-                game.MovePaddle(false, dir);
-                if (launch) game.TryLaunchBall(false);
+    // 尝试反序列化为 VersusNetMessage
+    VersusNetMessage msg;
+    if (Deserialize(data.data(), data.size(), msg)) {
+        switch (msg.type) {
+            case VersusMsgType::SEED:
+                if (!isHost) game.LoadLevel((unsigned int)msg.data1);
+                break;
+            case VersusMsgType::INPUT: {
+                int dir = msg.data1;
+                bool launch = (msg.data2 != 0);
+                if (isHost) {
+                    game.MovePaddle(false, dir);
+                    if (launch) game.TryLaunchBall(false);
+                }
+                break;
             }
-            break;
+            case VersusMsgType::CONTROL_START:
+                if (!isHost) gameStarted = true;
+                break;
+            case VersusMsgType::EFFECT_APPLIED: {
+                EffectType etype = (EffectType)msg.data1;
+                bool upper = (msg.data2 != 0);
+                auto effect = EffectFactory::CreateEffect(static_cast<SkillType>(etype));
+                if (effect) game.ApplyEffectToPlayer(std::move(effect), upper);
+                break;
+            }
+            case VersusMsgType::GAME_OVER: {
+                drawResult = true;
+                resultText = (msg.data1 == 1) ? "YOU LOSE!" : "YOU WIN!";
+                gameStarted = false;
+                break;
+            }
+            default: break;
         }
-        case VersusMsgType::CONTROL_START:
-            if (!isHost) gameStarted = true;
-            break;
-        case VersusMsgType::EFFECT_APPLIED: {
-            EffectType etype = (EffectType)msg.data1;
-            bool upper = (msg.data2 != 0);
-            auto effect = EffectFactory::CreateEffect(static_cast<SkillType>(etype));
-            if (effect) game.ApplyEffectToPlayer(std::move(effect), upper);
-            break;
-        }
-        case VersusMsgType::GAME_OVER: {
-            drawResult = true;
-            resultText = (msg.data1 == 1) ? "YOU LOSE!" : "YOU WIN!";
-            gameStarted = false;
-            break;
-        }
-        default: break;
+        return;
     }
 }
 
@@ -270,9 +259,9 @@ void VersusManager::Update(float dt) {
             if (game.GetUpperLives() <= 0 || game.GetLowerLives() <= 0) {
                 drawResult = true;
                 int winner = (game.GetUpperLives() <= 0) ? 0 : 1;
-                int hostWin = (winner == 1) ? 1 : 0;   // 1=upper赢？根据角色调整
+                int hostWin = (winner == 1) ? 1 : 0;
                 VersusNetMessage msg{ VersusMsgType::GAME_OVER, hostWin, 0, 0 };
-                SendMessage(PackData(msg));
+                SendMessage(Serialize(msg), true);
                 resultText = hostWin ? "YOU WIN!" : "YOU LOSE!";
                 gameStarted = false;
             }
@@ -311,7 +300,7 @@ void VersusManager::HandleInput() {
             latestHostTime = 0.0f;
             if (isHost) {
                 VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
-                SendMessage(PackData(seedMsg));
+                SendMessage(Serialize(seedMsg), true);
             }
         }
         if (IsKeyPressed(KEY_B)) running = false;
@@ -323,7 +312,7 @@ void VersusManager::HandleInput() {
             if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE)) {
                 gameStarted = true;
                 VersusNetMessage startMsg{ VersusMsgType::CONTROL_START };
-                SendMessage(PackData(startMsg));
+                SendMessage(Serialize(startMsg), true);
             }
         }
         if (IsKeyPressed(KEY_B)) running = false;
@@ -341,8 +330,12 @@ void VersusManager::HandleInput() {
         game.MovePaddle(upper, dir);
         if (launch) game.TryLaunchBall(upper);
     } else {
-        VersusNetMessage inputMsg{ VersusMsgType::INPUT, dir, launch ? 1 : 0, 0 };
-        SendMessage(PackData(inputMsg), false);
+        VersusNetMessage inputMsg;
+        inputMsg.type = VersusMsgType::INPUT;
+        inputMsg.data1 = dir;
+        inputMsg.data2 = launch ? 1 : 0;
+        inputMsg.floatData = 0.0f;
+        SendMessage(Serialize(inputMsg), false);
     }
 }
 
@@ -392,20 +385,23 @@ void VersusManager::Draw() {
 
 // ---------- 回调 ----------
 void VersusManager::OnLifeLost() {}
+
 void VersusManager::OnBallLaunched(bool isUpper) {
     VersusNetMessage msg{ VersusMsgType::BALL_LAUNCHED, isUpper ? 1 : 0, 0, 0 };
-    SendMessage(PackData(msg));
-}
-void VersusManager::OnEffectApplied(EffectType type, bool upper) {
-    VersusNetMessage msg{ VersusMsgType::EFFECT_APPLIED, (int32_t)type, upper ? 1 : 0, 0 };
-    SendMessage(PackData(msg));
-}
-void VersusManager::OnEffectRemoved(EffectType type, bool upper) {
-    VersusNetMessage msg{ VersusMsgType::EFFECT_REMOVED, (int32_t)type, upper ? 1 : 0, 0 };
-    SendMessage(PackData(msg));
+    SendMessage(Serialize(msg), true);
 }
 
-// ---------- 插值相关（不变） ----------
+void VersusManager::OnEffectApplied(EffectType type, bool upper) {
+    VersusNetMessage msg{ VersusMsgType::EFFECT_APPLIED, (int32_t)type, upper ? 1 : 0, 0 };
+    SendMessage(Serialize(msg), true);
+}
+
+void VersusManager::OnEffectRemoved(EffectType type, bool upper) {
+    VersusNetMessage msg{ VersusMsgType::EFFECT_REMOVED, (int32_t)type, upper ? 1 : 0, 0 };
+    SendMessage(Serialize(msg), true);
+}
+
+// ---------- 插值相关 ----------
 void VersusManager::AddSnapshotToBuffer(const GameStateSnapshot& snap) {
     if (!snapshotBuffer.empty() && snap.hostGameTime <= snapshotBuffer.back().hostGameTime)
         return;
@@ -442,8 +438,8 @@ void VersusManager::ApplyInterpolation(float renderTime) {
         if (t < 0.0f) t = 0.0f;
         if (t > 1.0f) t = 1.0f;
     }
-    // 1. 插值几何属性
+    // 几何插值
     game.ApplyInterpolatedState(*prev, *next, t);
-    // 2. 离散同步效果和技能球（使用最新的 next 快照）
+    // 离散同步效果和技能球（使用最新快照）
     game.ApplyEffectsAndSkillBalls(*next);
 }

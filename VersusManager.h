@@ -5,7 +5,7 @@
 #include "VersusGame.h"
 #include "VersusNetMessage.h"
 #include "SoundManager.h"
-#include "ThreadSafeQueue.h"          // 先前提供的线程安全队列
+#include "ThreadSafeQueue.h"
 #include "json.hpp"
 #include <thread>
 #include <atomic>
@@ -46,7 +46,7 @@ private:
     std::thread networkThread;
     std::atomic<bool> threadRunning{false};
     std::atomic<bool> quitThread{false};
-    std::atomic<bool> isConnected{false};   // 主线程用于判断连接状态
+    std::atomic<bool> isConnected{false};
 
     // 线程安全队列
     ThreadSafeQueue<std::vector<uint8_t>> incomingQueue;

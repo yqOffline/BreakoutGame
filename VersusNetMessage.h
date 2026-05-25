@@ -2,7 +2,10 @@
 #define VERSUS_NET_MESSAGE_H
 
 #include <cstdint>
+#include <vector>
+#include <cstddef>
 
+// ========== 消息类型枚举 ==========
 enum class VersusMsgType : uint8_t {
     SEED,
     INPUT,
@@ -17,13 +20,13 @@ enum class VersusMsgType : uint8_t {
     PARTICLE_SPAWN
 };
 
-// 限制常量
+// ========== 限制常量 ==========
 const int MAX_EFFECTS_PER_PLAYER = 4;   // 每个玩家最多同时生效的效果数
 const int MAX_SKILLBALLS = 8;           // 最多同时存在的技能球
 
+// ========== 网络结构体（仅供内部使用，不再直接 memcpy）==========
 #pragma pack(push, 1)
 
-// 基础网络消息（用于简单控制）
 struct VersusNetMessage {
     VersusMsgType type;
     int32_t data1;
@@ -31,7 +34,6 @@ struct VersusNetMessage {
     float floatData;
 };
 
-// 技能球生成专用消息
 struct SkillBallSpawnMsg {
     VersusMsgType type;     // SKILLBALL_SPAWN
     float posX, posY;
@@ -39,7 +41,6 @@ struct SkillBallSpawnMsg {
     int32_t skillType;      // SkillType 枚举值
 };
 
-// 粒子生成专用消息
 struct ParticleSpawnMsg {
     VersusMsgType type;     // PARTICLE_SPAWN
     float posX, posY;
@@ -48,7 +49,6 @@ struct ParticleSpawnMsg {
     uint8_t isBreak;
 };
 
-// 游戏状态快照（主机→客户端，包含完整游戏状态）
 struct GameStateSnapshot {
     float ballX, ballY;
     float ballSpeedX, ballSpeedY;
@@ -76,5 +76,23 @@ struct GameStateSnapshot {
 };
 
 #pragma pack(pop)
+
+// ========== 序列化函数声明 ==========
+
+// VersusNetMessage
+std::vector<uint8_t> Serialize(const VersusNetMessage& msg);
+bool Deserialize(const uint8_t* data, size_t len, VersusNetMessage& msg);
+
+// GameStateSnapshot
+std::vector<uint8_t> Serialize(const GameStateSnapshot& snap);
+bool Deserialize(const uint8_t* data, size_t len, GameStateSnapshot& snap);
+
+// SkillBallSpawnMsg
+std::vector<uint8_t> Serialize(const SkillBallSpawnMsg& msg);
+bool Deserialize(const uint8_t* data, size_t len, SkillBallSpawnMsg& msg);
+
+// ParticleSpawnMsg
+std::vector<uint8_t> Serialize(const ParticleSpawnMsg& msg);
+bool Deserialize(const uint8_t* data, size_t len, ParticleSpawnMsg& msg);
 
 #endif // VERSUS_NET_MESSAGE_H
