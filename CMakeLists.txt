@@ -34,6 +34,7 @@ set(SOURCES
     NetworkThread.cpp
     ThreadPool.cpp
     Grid.cpp
+    VersusNetMessage.cpp
 )
 
 add_executable(game ${SOURCES})

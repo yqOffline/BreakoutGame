@@ -4,6 +4,38 @@
 #include <ctime>
 #include "rlgl.h"
 
+// 辅助 UI 函数（与 game.cpp 中一致）
+static void DrawRoundedRect(Rectangle rect, float radius, Color color) {
+    if (radius <= 0) {
+        DrawRectangleRec(rect, color);
+        return;
+    }
+    radius = fmin(radius, fmin(rect.width / 2.0f, rect.height / 2.0f));
+    DrawRectangle(rect.x + radius, rect.y, rect.width - radius * 2, rect.height, color);
+    DrawRectangle(rect.x, rect.y + radius, rect.width, rect.height - radius * 2, color);
+    DrawCircle(rect.x + radius, rect.y + radius, radius, color);
+    DrawCircle(rect.x + rect.width - radius, rect.y + radius, radius, color);
+    DrawCircle(rect.x + radius, rect.y + rect.height - radius, radius, color);
+    DrawCircle(rect.x + rect.width - radius, rect.y + rect.height - radius, radius, color);
+}
+
+static bool IsPointInRect(Vector2 point, Rectangle rect) {
+    return point.x >= rect.x && point.x <= rect.x + rect.width &&
+           point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+static void DrawButton(Rectangle rect, const char* text, int fontSize, Color normal, Color hover, Color pressed, bool isHover, bool isPressed) {
+    Color drawColor = normal;
+    if (isPressed) drawColor = pressed;
+    else if (isHover) drawColor = hover;
+    DrawRoundedRect(rect, 10.0f, drawColor);
+    DrawRectangleLinesEx(rect, 2, Fade(BLACK, 0.3f));
+    int tw = MeasureText(text, fontSize);
+    float tx = rect.x + (rect.width - tw) / 2;
+    float ty = rect.y + (rect.height - fontSize) / 2;
+    DrawText(text, tx, ty, fontSize, BLACK);
+}
+
 RaceManager::RaceManager(int baseWidth, int baseHeight, const json& cfg, bool asHost, const std::string& ip, uint16_t port)
     : winWidth(baseWidth * 2), winHeight(baseHeight), gameWidth(baseWidth), gameHeight(baseHeight), config(cfg),
       leftPlayer(gameWidth, gameHeight, config, true),
@@ -29,6 +61,7 @@ RaceManager::RaceManager(int baseWidth, int baseHeight, const json& cfg, bool as
 
     continueBtn = { winWidth / 2.0f - 60, winHeight / 2.0f - 25, 120, 50 };
     restartBtn  = { winWidth / 2.0f - 60, winHeight / 2.0f + 40, 120, 50 };
+
 }
 
 RaceManager::~RaceManager() {
@@ -181,7 +214,8 @@ void RaceManager::HandleInput() {
             running = false;
             return;
         }
-        Rectangle backBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 90, 120, 50 };
+        // 更新 backBtn 矩形，与 DrawLobby 中的位置一致
+        Rectangle backBtn = { winWidth / 2.0f - 60, (float)winHeight - 70, 120, 50 };
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtn)) {
             m_backToLobby = true;
             running = false;
@@ -189,7 +223,8 @@ void RaceManager::HandleInput() {
         }
 
         if (role == NetworkRole::HOST && networkThread && networkThread->IsRunning()) {
-            Rectangle startBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 30, 120, 50 };
+            // 更新 startBtn 矩形，与 DrawLobby 中的位置一致
+            Rectangle startBtn = { winWidth / 2.0f - 80, winHeight / 2.0f + 40, 160, 50 };
             if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtn)) || IsKeyPressed(KEY_S)) {
                 StartGame();
                 NetMessage msg{ NetMsgType::CONTROL_START };
@@ -264,27 +299,72 @@ void RaceManager::Draw() {
 }
 
 void RaceManager::DrawLobby() {
-    DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.5f));
-    const char* statusText = nullptr;
-    if (role == NetworkRole::HOST) {
-        statusText = networkThread && networkThread->IsRunning() ? "Client connected! Press START to begin." : "Waiting for client...";
+    int sw = winWidth;
+    int sh = winHeight;
+
+    // 左右分屏背景
+    Texture2D bgLeft = TextureCache::Instance().GetTexture("1.png");
+    Texture2D bgRight = TextureCache::Instance().GetTexture("3.png");
+    int halfWidth = sw / 2;
+
+    if (bgLeft.id != 0) {
+        DrawTexturePro(bgLeft,
+            {0, 0, (float)bgLeft.width, (float)bgLeft.height},
+            {0, 0, (float)halfWidth, (float)sh},
+            {0, 0}, 0, WHITE);
     } else {
-        statusText = networkThread && networkThread->IsRunning() ? "Connected to host. Waiting for start..." : "Connecting to host...";
-    }
-    int tw = MeasureText(statusText, 30);
-    DrawText(statusText, winWidth/2 - tw/2, winHeight/2 - 15, 30, WHITE);
-
-    // START 按钮（仅 Host 且已连接）
-    if (role == NetworkRole::HOST && networkThread && networkThread->IsRunning()) {
-        Rectangle startBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 30, 120, 50 };
-        DrawRectangleRec(startBtn, (CheckCollisionPointRec(GetMousePosition(), startBtn) || IsKeyPressed(KEY_S)) ? DARKGREEN : GREEN);
-        DrawText("START (S)", startBtn.x + 10, startBtn.y + 15, 20, BLACK);
+        DrawRectangle(0, 0, halfWidth, sh, DARKGRAY);
     }
 
-    // BACK 按钮（通用）
-    Rectangle backBtn = { winWidth / 2.0f - 60, winHeight / 2.0f + 90, 120, 50 };
-    DrawRectangleRec(backBtn, (CheckCollisionPointRec(GetMousePosition(), backBtn) || IsKeyPressed(KEY_B)) ? DARKGRAY : GRAY);
-    DrawText("BACK (B)", backBtn.x + 20, backBtn.y + 15, 20, WHITE);
+    if (bgRight.id != 0) {
+        DrawTexturePro(bgRight,
+            {0, 0, (float)bgRight.width, (float)bgRight.height},
+            {(float)halfWidth, 0, (float)halfWidth, (float)sh},
+            {0, 0}, 0, WHITE);
+    } else {
+        DrawRectangle(halfWidth, 0, halfWidth, sh, DARKGRAY);
+    }
+
+    // 半透明白色圆角面板
+    Rectangle panel = { sw/2.0f - 250, sh/2.0f - 150, 500, 300 };
+    DrawRectangleRounded(panel, 0.2f, 10, Fade(WHITE, 0.85f));
+    DrawRectangleLinesEx(panel, 2, BLACK);
+
+    // 标题
+    DrawText("RACE LOBBY", sw/2 - 100, sh/2 - 110, 40, DARKBLUE);
+
+    // 显示角色
+    const char* roleText = (role == NetworkRole::HOST) ? "HOST" : "GUEST";
+    Color roleColor = (role == NetworkRole::HOST) ? BLUE : RED;
+    DrawText(TextFormat("You are: %s", roleText), sw/2 - 80, sh/2 - 60, 24, roleColor);
+
+    // 连接状态（带圆点）
+    bool connected = networkThread && networkThread->IsRunning() && !networkError;
+    const char* statusText = connected ? (role == NetworkRole::HOST ? "Client connected" : "Connected to host") : "Connecting...";
+    Color statusColor = connected ? GREEN : YELLOW;
+    DrawText(statusText, sw/2 - 100, sh/2 - 20, 22, statusColor);
+    DrawCircle(sw/2 - 120, sh/2 - 12, 8, statusColor);
+
+    // 开始按钮（仅 Host）
+    if (role == NetworkRole::HOST && connected) {
+        Rectangle startBtn = { sw/2.0f - 80, sh/2.0f + 40, 160, 50 };
+        bool hover = CheckCollisionPointRec(GetMousePosition(), startBtn);
+        Color btnColor = hover ? DARKGREEN : GREEN;
+        DrawRectangleRounded(startBtn, 0.2f, 8, btnColor);
+        DrawRectangleLinesEx(startBtn, 2, BLACK);
+        DrawText("START GAME", startBtn.x + 20, startBtn.y + 12, 24, WHITE);
+        DrawText("Press S to start", sw/2 - 80, sh/2 + 100, 18, DARKGRAY);
+    } else if (role == NetworkRole::GUEST) {
+        DrawText("Waiting for host to start...", sw/2 - 140, sh/2 + 50, 20, DARKGRAY);
+    }
+
+    // 返回按钮
+    Rectangle backBtn = { sw/2.0f - 60, (float)sh - 70, 120, 50 };
+    bool hoverBack = CheckCollisionPointRec(GetMousePosition(), backBtn);
+    Color backColor = hoverBack ? DARKGRAY : GRAY;
+    DrawRectangleRounded(backBtn, 0.2f, 8, backColor);
+    DrawRectangleLinesEx(backBtn, 2, BLACK);
+    DrawText("BACK", backBtn.x + 35, backBtn.y + 12, 24, WHITE);
 }
 
 void RaceManager::DrawPauseScreen() {

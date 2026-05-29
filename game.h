@@ -35,7 +35,8 @@ enum class GameState {
     GAME_OVER,
     LEVEL_CLEAR,
     VICTORY,
-    RANKING
+    RANKING,
+    SETTINGS
 };
 
 enum class PauseCause {
@@ -210,6 +211,25 @@ private:
     void ToggleEditMode();                     // 切换编辑模式
     void HandleEditModeInput();                // 编辑模式下的输入处理
     void DrawEditModeUI();                     // 绘制编辑模式界面
+
+    Font uiFont;
+    Texture2D heartIcon;
+    Texture2D trophyIcon;
+    Texture2D clockIcon;
+    bool uiLoaded;
+
+    float fadeAlpha;
+    bool fading;
+    Texture2D bg;
+
+    // 设置界面
+    float bgmVolume;
+    float sfxVolume;
+    Rectangle bgmSlider, sfxSlider;
+    bool draggingBgm, draggingSfx;
+    Music bgmMusic;
+    bool bgmMusicLoaded;
+
 public:
     Game(int screenWidth, int screenHeight);
     ~Game();
@@ -241,6 +261,13 @@ public:
     void DeleteSaveFile();
     void ContinueGame();
     bool IsEditMode() const { return editingMode; }
+    void DrawRoundedRect(Rectangle rect, float radius, Color color);
+    void DrawButton(Rectangle rect, const char* text, int fontSize, Color normal, Color hover, Color pressed, bool isHover, bool isPressed);
+    void DrawHUD();
+    void SaveVolumeSettings();
+    void LoadVolumeSettings();
+    void SetBGM(Music music);
+    void ApplyVolume();
 };
 
 #endif // GAME_H

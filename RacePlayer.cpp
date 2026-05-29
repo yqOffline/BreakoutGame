@@ -405,7 +405,7 @@ void RacePlayer::Draw() {
     DrawText(TextFormat("SCORE: %d", score), 10, 10, 20, BLUE);
     DrawText(TextFormat("LIVES: %d", hearts), 10, 40, 20, RED);
     DrawText(TextFormat("LEVEL: %d", currentLevel + 1), 10, 70, 20, DARKGREEN);
-    DrawText(TextFormat("TIME: %.1f", gameTimer), 10, 100, 20, DARKPURPLE);
+    DrawText(TextFormat("TIME: %.1f", gameTimer), 10, 100, 20, PURPLE);
     DrawText(TextFormat("DEATHS: %d", totalDeaths), 10, 130, 20, MAROON);
 
     int effectY = 160;

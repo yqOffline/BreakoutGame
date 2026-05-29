@@ -672,4 +672,3 @@ void VersusGame::ApplyEffectsAndSkillBalls(const GameStateSnapshot& snap) {
         }
     }
 }
-

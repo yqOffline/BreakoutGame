@@ -6,6 +6,38 @@
 #include <cstring>
 #include <enet/enet.h>
 
+// 辅助 UI 函数（与 game.cpp 中一致）
+static void DrawRoundedRect(Rectangle rect, float radius, Color color) {
+    if (radius <= 0) {
+        DrawRectangleRec(rect, color);
+        return;
+    }
+    radius = fmin(radius, fmin(rect.width / 2.0f, rect.height / 2.0f));
+    DrawRectangle(rect.x + radius, rect.y, rect.width - radius * 2, rect.height, color);
+    DrawRectangle(rect.x, rect.y + radius, rect.width, rect.height - radius * 2, color);
+    DrawCircle(rect.x + radius, rect.y + radius, radius, color);
+    DrawCircle(rect.x + rect.width - radius, rect.y + radius, radius, color);
+    DrawCircle(rect.x + radius, rect.y + rect.height - radius, radius, color);
+    DrawCircle(rect.x + rect.width - radius, rect.y + rect.height - radius, radius, color);
+}
+
+static bool IsPointInRect(Vector2 point, Rectangle rect) {
+    return point.x >= rect.x && point.x <= rect.x + rect.width &&
+           point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+static void DrawButton(Rectangle rect, const char* text, int fontSize, Color normal, Color hover, Color pressed, bool isHover, bool isPressed) {
+    Color drawColor = normal;
+    if (isPressed) drawColor = pressed;
+    else if (isHover) drawColor = hover;
+    DrawRoundedRect(rect, 10.0f, drawColor);
+    DrawRectangleLinesEx(rect, 2, Fade(BLACK, 0.3f));
+    int tw = MeasureText(text, fontSize);
+    float tx = rect.x + (rect.width - tw) / 2;
+    float ty = rect.y + (rect.height - fontSize) / 2;
+    DrawText(text, tx, ty, fontSize, BLACK);
+}
+
 // ---------- 构造函数 ----------
 VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const std::string& ip, uint16_t port)
     : winWidth(ww), winHeight(wh), config(cfg),
@@ -84,6 +116,7 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
                     case ENET_EVENT_TYPE_CONNECT:
                         peer = event.peer;
                         isConnected = true;
+                        (LOG_INFO, "Guest: Connected to host");
                         if (asHost) {
                             VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
                             auto data = Serialize(seedMsg);
@@ -93,6 +126,7 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
                         break;
 
                     case ENET_EVENT_TYPE_RECEIVE: {
+                        (LOG_INFO, "Guest: Received packet, size=%d", event.packet->dataLength);
                         std::vector<uint8_t> data(event.packet->dataLength);
                         std::memcpy(data.data(), event.packet->data, event.packet->dataLength);
                         incomingQueue.push(std::move(data));
@@ -103,6 +137,7 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
                     case ENET_EVENT_TYPE_DISCONNECT:
                         peer = nullptr;
                         isConnected = false;
+                        (LOG_INFO, "Guest: Disconnected");
                         incomingQueue.push({});
                         break;
 
@@ -172,10 +207,15 @@ void VersusManager::ProcessIncomingMessages() {
     }
 }
 
+// 成员函数实现
 void VersusManager::HandleIncomingPacket(const std::vector<uint8_t>& data) {
     // 尝试反序列化为 GameStateSnapshot
     GameStateSnapshot snap;
     if (Deserialize(data.data(), data.size(), snap)) {
+        if (!isHost && !gameStarted && snap.hostGameTime > 0.0f) {
+            (LOG_INFO, "Guest: Auto-starting on first snapshot with positive game time");
+            gameStarted = true;
+        }
         if (!isHost) {
             AddSnapshotToBuffer(snap);
         }
@@ -184,6 +224,7 @@ void VersusManager::HandleIncomingPacket(const std::vector<uint8_t>& data) {
     // 尝试反序列化为 SkillBallSpawnMsg
     SkillBallSpawnMsg smsg;
     if (Deserialize(data.data(), data.size(), smsg) && smsg.type == VersusMsgType::SKILLBALL_SPAWN) {
+        (LOG_INFO, "Guest: Received VersusNetMessage type = %d", (int)smsg.type);
         SkillType type = static_cast<SkillType>(smsg.skillType);
         Vector2 pos = { smsg.posX, smsg.posY };
         Vector2 velocity = { 0.0f, smsg.speedY };
@@ -227,7 +268,10 @@ void VersusManager::HandleIncomingPacket(const std::vector<uint8_t>& data) {
                 break;
             }
             case VersusMsgType::CONTROL_START:
-                if (!isHost) gameStarted = true;
+                if (!isHost) {
+                    void HandleIncomingPacket(const std::vector<uint8_t>& data);
+                    gameStarted = true;
+                }
                 break;
             case VersusMsgType::EFFECT_APPLIED: {
                 EffectType etype = (EffectType)msg.data1;
@@ -310,6 +354,7 @@ void VersusManager::HandleInput() {
     if (!gameStarted) {
         if (isHost && isConnected) {
             if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE)) {
+                (LOG_INFO, "Host: Sending CONTROL_START");
                 gameStarted = true;
                 VersusNetMessage startMsg{ VersusMsgType::CONTROL_START };
                 SendMessage(Serialize(startMsg), true);
@@ -354,28 +399,64 @@ void VersusManager::Draw() {
     }
 
     if (!gameStarted && !drawResult) {
-        DrawRectangle(0, winHeight/2 - 50, winWidth, 80, Fade(BLACK, 0.4f));
-        const char* status;
-        if (isHost) {
-            status = (isConnected && threadRunning) ? "Press S to start" : "Waiting for opponent...";
+        int sw = winWidth;
+        int sh = winHeight;
+
+        // 背景图片
+        Texture2D bg = TextureCache::Instance().GetTexture("1.png");
+        if (bg.id != 0) {
+            DrawTexturePro(bg, {0,0,(float)bg.width,(float)bg.height},
+                        {0,0,(float)sw,(float)sh}, {0,0}, 0, WHITE);
         } else {
-            status = (isConnected && threadRunning) ? "WAIT HOST TO START" : "Connecting to host...";
+            ClearBackground(DARKGRAY);
         }
-        int tw = MeasureText(status, 30);
-        DrawText(status, winWidth/2 - tw/2, winHeight/2 - 35, 30, WHITE);
-        if (isHost && isConnected && threadRunning) {
-            DrawRectangleRec(startBtn, GREEN);
-            DrawText("START (S)", startBtn.x + 15, startBtn.y + 15, 20, BLACK);
+
+        // 半透明白色圆角面板
+        Rectangle panel = { sw/2.0f - 250, sh/2.0f - 150, 500, 300 };
+        DrawRectangleRounded(panel, 0.2f, 10, Fade(WHITE, 0.85f));
+        DrawRectangleLinesEx(panel, 2, BLACK);
+
+        DrawText("VERSUS LOBBY", sw/2 - 120, sh/2 - 110, 40, DARKBLUE);
+
+        // 角色
+        const char* roleText = isHost ? "HOST" : "GUEST";
+        Color roleColor = isHost ? BLUE : RED;
+        DrawText(TextFormat("You are: %s", roleText), sw/2 - 80, sh/2 - 60, 24, roleColor);
+
+        // 连接状态
+        bool connected = isConnected && threadRunning;
+        const char* status = connected ? (isHost ? "Opponent connected" : "Connected to host") : "Connecting...";
+        Color statusColor = connected ? GREEN : YELLOW;
+        DrawText(status, sw/2 - 100, sh/2 - 20, 22, statusColor);
+        DrawCircle(sw/2 - 120, sh/2 - 12, 8, statusColor);
+
+        // 开始按钮（仅 Host）
+        if (isHost && connected) {
+            Rectangle startBtnRect = { sw/2.0f - 80, sh/2.0f + 40, 160, 50 };
+            bool hover = CheckCollisionPointRec(GetMousePosition(), startBtnRect);
+            Color btnColor = hover ? DARKGREEN : GREEN;
+            DrawRectangleRounded(startBtnRect, 0.2f, 8, btnColor);
+            DrawRectangleLinesEx(startBtnRect, 2, BLACK);
+            DrawText("START GAME", startBtnRect.x + 20, startBtnRect.y + 12, 24, WHITE);
+            DrawText("Press S to start", sw/2 - 80, sh/2 + 100, 18, DARKGRAY);
+        } else if (!isHost && connected) {
+            DrawText("Waiting for host to start...", sw/2 - 140, sh/2 + 50, 20, DARKGRAY);
         }
-        DrawRectangleRec(backBtn, GRAY);
-        DrawText("BACK (B)", backBtn.x + 20, backBtn.y + 15, 20, WHITE);
+
+        // 返回按钮
+        Rectangle backBtnRect = { sw/2.0f - 60, (float)sh - 70, 120, 50 };
+        bool hoverBack = CheckCollisionPointRec(GetMousePosition(), backBtnRect);
+        Color backColor = hoverBack ? DARKGRAY : GRAY;
+        DrawRectangleRounded(backBtnRect, 0.2f, 8, backColor);
+        DrawRectangleLinesEx(backBtnRect, 2, BLACK);
+        DrawText("BACK", backBtnRect.x + 35, backBtnRect.y + 12, 24, WHITE);
     }
 
     if (drawResult) {
         DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.8f));
         int tw = MeasureText(resultText.c_str(), 50);
         DrawText(resultText.c_str(), winWidth/2 - tw/2, winHeight/2 - 60, 50,
-                 resultText.find("WIN") != std::string::npos ? GOLD : RED);
+                resultText.find("WIN") != std::string::npos ? GOLD : RED);
         DrawRectangleRec(restartBtn, GREEN);
         DrawText("RESTART (R)", restartBtn.x + 10, restartBtn.y + 15, 20, BLACK);
         DrawRectangleRec(backBtn, GRAY);
@@ -438,8 +519,6 @@ void VersusManager::ApplyInterpolation(float renderTime) {
         if (t < 0.0f) t = 0.0f;
         if (t > 1.0f) t = 1.0f;
     }
-    // 几何插值
     game.ApplyInterpolatedState(*prev, *next, t);
-    // 离散同步效果和技能球（使用最新快照）
     game.ApplyEffectsAndSkillBalls(*next);
 }
