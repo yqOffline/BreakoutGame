@@ -1275,7 +1275,7 @@ void Game::Draw() {
 
             // 主圆角面板
             Rectangle panel = { sw/2.0f - 250, sh/2.0f - 160, 500, 320 };
-            DrawRoundedRect(panel, 20, Fade(GRAY, 0.7f));
+            DrawRoundedRect(panel, 20, Fade(WHITE, 0.4f));
 
             // 标题
             const char* modeText = isRaceMode ? "RACE MODE" : "VERSUS MODE";
@@ -1401,7 +1401,7 @@ void Game::Draw() {
         case GameState::GAME_OVER: {
             int sw = GetScreenWidth();
             int sh = GetScreenHeight();
-            DrawRoundedRect({ sw/2.0f - 200, sh/2.0f - 100, 400, 200 }, 20, Fade(BLACK, 0.85f));
+            DrawRoundedRect({ sw/2.0f - 200, sh/2.0f - 100, 400, 200 }, 20, Fade(GRAY, 0.4f));
             DrawText("GAME OVER", sw/2 - 110, sh/2 - 60, 48, RED);
             
             bool hoverRest = IsPointInRect(GetMousePosition(), gameOverRestartBtn);

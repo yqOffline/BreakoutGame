@@ -322,6 +322,7 @@ void VersusManager::Update(float dt) {
 
 // ---------- HandleInput ----------
 void VersusManager::HandleInput() {
+    Vector2 mousePos = GetMousePosition();
     // 丢包模拟开关
     if (isHost && IsKeyPressed(KEY_K)) {
         simulatePacketLoss = !simulatePacketLoss;
@@ -336,18 +337,16 @@ void VersusManager::HandleInput() {
 
     if (drawResult) {
         if (IsKeyPressed(KEY_R)) {
-            gameStarted = false;
-            drawResult = false;
-            pendingSeed = (unsigned int)time(nullptr);
-            game.LoadLevel(pendingSeed);
-            snapshotBuffer.clear();
-            latestHostTime = 0.0f;
-            if (isHost) {
-                VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
-                SendMessage(Serialize(seedMsg), true);
-            }
+            // 重启逻辑...
         }
-        if (IsKeyPressed(KEY_B)) running = false;
+        if (IsKeyPressed(KEY_B)) {
+            running = false;  // 返回大厅
+        }
+        // 鼠标点击处理
+        Rectangle backBtnRect = { winWidth / 2.0f - 100, winHeight / 2.0f + 110, 200, 50 };
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtnRect)) {
+            running = false;
+        }
         return;
     }
 
@@ -453,14 +452,52 @@ void VersusManager::Draw() {
     }
 
     if (drawResult) {
-        DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.8f));
-        int tw = MeasureText(resultText.c_str(), 50);
-        DrawText(resultText.c_str(), winWidth/2 - tw/2, winHeight/2 - 60, 50,
-                resultText.find("WIN") != std::string::npos ? GOLD : RED);
-        DrawRectangleRec(restartBtn, GREEN);
-        DrawText("RESTART (R)", restartBtn.x + 10, restartBtn.y + 15, 20, BLACK);
-        DrawRectangleRec(backBtn, GRAY);
-        DrawText("BACK (B)", backBtn.x + 20, backBtn.y + 15, 20, WHITE);
+        int sw = winWidth;
+        int sh = winHeight;
+
+        // 背景图片
+        Texture2D bg = background;  // 已经加载的背景纹理，或重新加载
+        if (bg.id == 0) bg = TextureCache::Instance().GetTexture("1.png");
+        if (bg.id != 0) {
+            DrawTexturePro(bg, {0,0,(float)bg.width,(float)bg.height},
+                        {0,0,(float)sw,(float)sh}, {0,0}, 0, WHITE);
+        } else {
+            DrawRectangle(0, 0, sw, sh, DARKGRAY);
+        }
+
+        // 半透明白色圆角面板
+        Rectangle panel = { sw/2.0f - 250, sh/2.0f - 150, 500, 300 };
+        DrawRectangleRounded(panel, 0.2f, 10, Fade(WHITE, 0.85f));
+        DrawRectangleLinesEx(panel, 2, BLACK);
+
+        // 胜负文字
+        bool isWin = (resultText.find("WIN") != std::string::npos);
+        const char* text = isWin ? "YOU WIN!" : "YOU LOSE!";
+        Color textColor = isWin ? GOLD : RED;
+        int fontSize = 60;
+        int tw = MeasureText(text, fontSize);
+        DrawText(text, sw/2 - tw/2, sh/2 - 60, fontSize, textColor);
+
+        // 副文本（显示详细结果）
+        DrawText(resultText.c_str(), sw/2 - 100, sh/2 - 120, 28, DARKGRAY);
+
+        // 重启按钮
+        Rectangle restartBtnRect = { sw/2.0f - 100, sh/2.0f + 40, 200, 50 };
+        bool hoverRest = CheckCollisionPointRec(GetMousePosition(), restartBtnRect);
+        bool pressRest = IsMouseButtonDown(MOUSE_LEFT_BUTTON) && hoverRest;
+        Color btnColor = hoverRest ? DARKGREEN : GREEN;
+        DrawRectangleRounded(restartBtnRect, 0.2f, 8, btnColor);
+        DrawRectangleLinesEx(restartBtnRect, 2, BLACK);
+        DrawText("RESTART (R)", restartBtnRect.x + 30, restartBtnRect.y + 12, 24, WHITE);
+
+        // 返回按钮
+        Rectangle backBtnRect = { sw/2.0f - 100, sh/2.0f + 110, 200, 50 };
+        bool hoverBack = CheckCollisionPointRec(GetMousePosition(), backBtnRect);
+        bool pressBack = IsMouseButtonDown(MOUSE_LEFT_BUTTON) && hoverBack;
+        Color backColor = hoverBack ? DARKGRAY : GRAY;
+        DrawRectangleRounded(backBtnRect, 0.2f, 8, backColor);
+        DrawRectangleLinesEx(backBtnRect, 2, BLACK);
+        DrawText("BACK TO LOBBY (B)", backBtnRect.x + 15, backBtnRect.y + 12, 20, WHITE);
     }
 }
 

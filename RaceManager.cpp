@@ -198,8 +198,19 @@ void RaceManager::HandleInput() {
     Vector2 mousePos = GetMousePosition();
 
     if (localResult != RaceResult::NONE) {
-        if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtn)) || IsKeyPressed(KEY_R))
+        // 重启按钮（坐标与 DrawResultScreen 一致）
+        Rectangle restartBtnRect = { winWidth / 2.0f - 100, winHeight / 2.0f + 40, 200, 50 };
+        if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, restartBtnRect)) || IsKeyPressed(KEY_R)) {
             ResetGame();
+            return;
+        }
+        // 返回大厅按钮
+        Rectangle backBtnRect = { winWidth / 2.0f - 100, winHeight / 2.0f + 110, 200, 50 };
+        if ((IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtnRect)) || IsKeyPressed(KEY_B)) {
+            m_backToLobby = true;
+            running = false;
+            return;
+        }
         return;
     }
 
@@ -379,12 +390,62 @@ void RaceManager::DrawPauseScreen() {
 }
 
 void RaceManager::DrawResultScreen() {
-    DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.8f));
+    int sw = winWidth;
+    int sh = winHeight;
+
+    // 左右分屏背景（与 DrawLobby 保持一致）
+    Texture2D bgLeft = TextureCache::Instance().GetTexture("1.png");
+    Texture2D bgRight = TextureCache::Instance().GetTexture("3.png");
+    int halfWidth = sw / 2;
+
+    if (bgLeft.id != 0) {
+        DrawTexturePro(bgLeft,
+            {0, 0, (float)bgLeft.width, (float)bgLeft.height},
+            {0, 0, (float)halfWidth, (float)sh},
+            {0, 0}, 0, WHITE);
+    } else {
+        DrawRectangle(0, 0, halfWidth, sh, DARKGRAY);
+    }
+
+    if (bgRight.id != 0) {
+        DrawTexturePro(bgRight,
+            {0, 0, (float)bgRight.width, (float)bgRight.height},
+            {(float)halfWidth, 0, (float)halfWidth, (float)sh},
+            {0, 0}, 0, WHITE);
+    } else {
+        DrawRectangle(halfWidth, 0, halfWidth, sh, DARKGRAY);
+    }
+
+    // 半透明白色圆角面板（居中）
+    Rectangle panel = { sw/2.0f - 250, sh/2.0f - 150, 500, 400 };
+    DrawRectangleRounded(panel, 0.2f, 10, Fade(WHITE, 0.85f));
+    DrawRectangleLinesEx(panel, 2, BLACK);
+
+    // 胜负文字
     const char* text = (localResult == RaceResult::WIN) ? "YOU WIN!" : "YOU LOSE!";
-    int fontSize = 70;
+    Color textColor = (localResult == RaceResult::WIN) ? GOLD : RED;
+    int fontSize = 60;
     int tw = MeasureText(text, fontSize);
-    Color tc = (localResult == RaceResult::WIN) ? GOLD : RED;
-    DrawText(text, winWidth/2 - tw/2, winHeight/2 - 60, fontSize, tc);
-    DrawRectangleRec(restartBtn, (CheckCollisionPointRec(GetMousePosition(), restartBtn) || IsKeyPressed(KEY_R)) ? DARKGREEN : GREEN);
-    DrawText("RESTART (R)", restartBtn.x + 10, restartBtn.y + 15, 20, BLACK);
+    DrawText(text, sw/2 - tw/2, sh/2 - 60, fontSize, textColor);
+
+    // 副文本
+    DrawText("Game Over", sw/2 - 70, sh/2 - 120, 30, DARKGRAY);
+
+    // 重启按钮
+    Rectangle restartBtnRect = { sw/2.0f - 100, sh/2.0f + 40, 200, 50 };
+    bool hoverRest = CheckCollisionPointRec(GetMousePosition(), restartBtnRect);
+    bool pressRest = IsMouseButtonDown(MOUSE_LEFT_BUTTON) && hoverRest;
+    Color btnColor = hoverRest ? DARKGREEN : GREEN;
+    DrawRectangleRounded(restartBtnRect, 0.2f, 8, btnColor);
+    DrawRectangleLinesEx(restartBtnRect, 2, BLACK);
+    DrawText("RESTART (R)", restartBtnRect.x + 30, restartBtnRect.y + 12, 24, WHITE);
+
+    // 返回大厅按钮
+    Rectangle backBtn = { sw/2.0f - 100, sh/2.0f + 110, 200, 50 };
+    bool hoverBack = CheckCollisionPointRec(GetMousePosition(), backBtn);
+    bool pressBack = IsMouseButtonDown(MOUSE_LEFT_BUTTON) && hoverBack;
+    Color backColor = hoverBack ? DARKGRAY : GRAY;
+    DrawRectangleRounded(backBtn, 0.2f, 8, backColor);
+    DrawRectangleLinesEx(backBtn, 2, BLACK);
+    DrawText("BACK TO LOBBY (B)", backBtn.x + 15, backBtn.y + 12, 20, WHITE);
 }
