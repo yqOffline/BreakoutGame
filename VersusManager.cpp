@@ -291,9 +291,10 @@ void VersusManager::Update(float dt) {
     }
 }
 
-// ---------- HandleInput ----------
 void VersusManager::HandleInput() {
-    // 丢包模拟开关
+    Vector2 mousePos = GetMousePosition();
+
+    // 丢包模拟（仅 Host）
     if (isHost && IsKeyPressed(KEY_K)) {
         simulatePacketLoss = !simulatePacketLoss;
     }
@@ -305,8 +306,14 @@ void VersusManager::HandleInput() {
         else                             packetLossRate = 0.0f;
     }
 
+    // ========== 结果界面 ==========
     if (drawResult) {
+        Rectangle restartBtnRect = { winWidth/2.0f - 100, winHeight/2.0f + 40, 200, 60 };
+        Rectangle backBtnRect    = { winWidth/2.0f - 100, winHeight/2.0f + 110, 200, 50 };
+
+        // 键盘：R 重赛，B 返回大厅
         if (IsKeyPressed(KEY_R)) {
+            // 重置游戏状态
             gameStarted = false;
             drawResult = false;
             pendingSeed = (unsigned int)time(nullptr);
@@ -317,35 +324,86 @@ void VersusManager::HandleInput() {
                 VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
                 SendMessage(PackData(seedMsg));
             }
+            return;
         }
-        if (IsKeyPressed(KEY_B)) running = false;
-        return;
-    }
+        if (IsKeyPressed(KEY_B)) {
+            running = false;
+            return;
+        }
 
-    if (!gameStarted) {
-        if (isHost && isConnected) {
-            if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE)) {
-                gameStarted = true;
-                game.TryLaunchBall(true);   // 修改点：Host 发射球
-                VersusNetMessage startMsg{ VersusMsgType::CONTROL_START };
-                SendMessage(PackData(startMsg));
+        // 鼠标点击
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+            if (CheckCollisionPointRec(mousePos, restartBtnRect)) {
+                // 模拟按 R
+                gameStarted = false;
+                drawResult = false;
+                pendingSeed = (unsigned int)time(nullptr);
+                game.LoadLevel(pendingSeed);
+                snapshotBuffer.clear();
+                latestHostTime = 0.0f;
+                if (isHost) {
+                    VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
+                    SendMessage(PackData(seedMsg));
+                }
+                return;
+            }
+            if (CheckCollisionPointRec(mousePos, backBtnRect)) {
+                running = false;
+                return;
             }
         }
-        if (IsKeyPressed(KEY_B)) running = false;
         return;
     }
 
-    bool upper = isHost;
+    // ========== Lobby (未开始游戏) ==========
+    if (!gameStarted) {
+        // 返回按钮（键盘 B 或鼠标点击）
+        Rectangle backBtnRect = { winWidth/2.0f - 60, (float)winHeight - 80, 120, 50 };
+        if (IsKeyPressed(KEY_B) || 
+            (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtnRect))) {
+            running = false;
+            return;
+        }
+
+        if (isHost && isConnected) {
+            // Start 按钮：键盘 S / 空格，或鼠标点击 Start 区域
+            Rectangle startBtnRect = { winWidth/2.0f - 100, winHeight/2.0f + 40, 200, 60 };
+            bool startPressed = IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE);
+            if (!startPressed && IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, startBtnRect)) {
+                startPressed = true;
+            }
+            if (startPressed) {
+                gameStarted = true;
+                game.TryLaunchBall(true);                     // 发射本地球
+                VersusNetMessage startMsg{ VersusMsgType::CONTROL_START };
+                SendMessage(PackData(startMsg));
+                // 可选：立即发送一个快照，让客机尽快同步
+                SendGameState();
+            }
+        }
+        // Guest 端无需任何输入，等待主机
+        return;
+    }
+
+    // ========== 游戏中 ==========
+    bool upper = isHost;   // Host 控制上板，Guest 控制下板
     int dir = 0;
     if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  dir = -1;
     else if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) dir = 1;
-    bool launch = IsKeyPressed(KEY_SPACE) && game.IsBallAttached() &&
-                  ((upper && game.IsUpperWaitingLaunch()) || (!upper && game.IsLowerWaitingLaunch()));
+
+    bool launch = false;
+    if (IsKeyPressed(KEY_SPACE)) {
+        if ((upper && game.IsUpperWaitingLaunch()) || (!upper && game.IsLowerWaitingLaunch())) {
+            launch = true;
+        }
+    }
 
     if (isHost) {
+        // 主机直接控制自己的 paddle
         game.MovePaddle(upper, dir);
         if (launch) game.TryLaunchBall(upper);
     } else {
+        // 客机发送输入消息给主机
         VersusNetMessage inputMsg{ VersusMsgType::INPUT, dir, launch ? 1 : 0, 0 };
         SendMessage(PackData(inputMsg), false);
     }
@@ -366,21 +424,64 @@ void VersusManager::Draw() {
     }
 
     if (!gameStarted && !drawResult) {
-        DrawRectangle(0, winHeight/2 - 50, winWidth, 80, Fade(BLACK, 0.4f));
-        const char* status;
-        if (isHost) {
-            status = (isConnected && threadRunning) ? "Press S to start" : "Waiting for opponent...";
-        } else {
-            status = (isConnected && threadRunning) ? "WAIT HOST TO START" : "Connecting to host...";
+        int sw = winWidth, sh = winHeight;
+        // 半透明遮罩层，使文字更突出
+        DrawRectangle(0, 0, sw, sh, Fade(BLACK, 0.6f));
+
+        // 主面板
+        Rectangle panel = { sw/2.0f - 300, sh/2.0f - 180, 600, 360 };
+        DrawRectangleRounded(panel, 0.2f, 10, Fade(WHITE, 0.9f));
+        DrawRectangleLinesEx(panel, 3, GOLD);
+
+        // 标题
+        const char* title = "VERSUS MODE";
+        int tw = MeasureText(title, 48);
+        DrawText(title, sw/2 - tw/2, sh/2 - 140, 48, DARKBLUE);
+
+        // 角色显示
+        const char* roleText = isHost ? "HOST (Server)" : "GUEST (Client)";
+        Color roleColor = isHost ? BLUE : RED;
+        tw = MeasureText(roleText, 28);
+        DrawText(roleText, sw/2 - tw/2, sh/2 - 70, 28, roleColor);
+
+        // 连接状态
+        bool connected = isConnected && threadRunning;
+        const char* status = connected ? (isHost ? "Opponent connected" : "Connected to host") : "Connecting...";
+        Color statusColor = connected ? GREEN : YELLOW;
+        tw = MeasureText(status, 22);
+        DrawText(status, sw/2 - tw/2, sh/2 - 30, 22, statusColor);
+        DrawCircle(sw/2 - 110, sh/2 - 18, 8, statusColor);
+
+        // 按钮区域
+        if (isHost && connected) {
+            // Start 按钮（绿色渐变）
+            Rectangle startBtnRect = { sw/2.0f - 100, sh/2.0f + 40, 200, 60 };
+            bool hover = CheckCollisionPointRec(GetMousePosition(), startBtnRect);
+            Color btnColor = hover ? DARKGREEN : GREEN;
+            DrawRectangleRounded(startBtnRect, 0.3f, 8, btnColor);
+            DrawRectangleLinesEx(startBtnRect, 2, BLACK);
+            const char* startText = "START GAME";
+            tw = MeasureText(startText, 28);
+            DrawText(startText, startBtnRect.x + (startBtnRect.width - tw)/2, startBtnRect.y + 16, 28, WHITE);
+            // 按键提示
+            DrawText("Press S or SPACE", sw/2 - 80, sh/2 + 120, 18, DARKGRAY);
+        } else if (!isHost && connected) {
+            // Guest 等待界面
+            DrawText("Waiting for host to start...", sw/2 - 140, sh/2 + 50, 24, ORANGE);
+            // 旋转加载圈
+            float angle = GetTime() * 2.0f;
+            Vector2 center = { sw/2.0f, sh/2.0f + 100 };
+            DrawCircleSector(center, 20, angle*57.3f, (angle+120)*57.3f, 12, Fade(WHITE, 0.8f));
         }
-        int tw = MeasureText(status, 30);
-        DrawText(status, winWidth/2 - tw/2, winHeight/2 - 35, 30, WHITE);
-        if (isHost && isConnected && threadRunning) {
-            DrawRectangleRec(startBtn, GREEN);
-            DrawText("START (S)", startBtn.x + 15, startBtn.y + 15, 20, BLACK);
-        }
-        DrawRectangleRec(backBtn, GRAY);
-        DrawText("BACK (B)", backBtn.x + 20, backBtn.y + 15, 20, WHITE);
+
+        // 返回按钮
+        Rectangle backBtnRect = { sw/2.0f - 60, (float)sh - 80, 120, 50 };
+        bool hoverBack = CheckCollisionPointRec(GetMousePosition(), backBtnRect);
+        Color backColor = hoverBack ? DARKGRAY : GRAY;
+        DrawRectangleRounded(backBtnRect, 0.2f, 8, backColor);
+        DrawRectangleLinesEx(backBtnRect, 2, BLACK);
+        DrawText("BACK", backBtnRect.x + 32, backBtnRect.y + 12, 24, WHITE);
+        DrawText("Press B", sw/2 - 30, sh - 30, 16, GRAY);
     }
 
     if (drawResult) {

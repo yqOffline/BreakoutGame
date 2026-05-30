@@ -546,9 +546,38 @@ void VersusGame::Draw() {
     for (auto& sb : skillBalls) sb.Draw();
     particleSystem.Draw();
 
-    DrawText(TextFormat("UPPER: %d", upperLives), 10, 10, 20, BLUE);
-    DrawText(TextFormat("LOWER: %d", lowerLives), screenWidth - 150, 10, 20, RED);
+    // 上方玩家 HUD
+    DrawRectangle(0, 0, screenWidth, 60, Fade(BLACK, 0.7f));
+    DrawText(TextFormat("UPPER LIVES: %d", upperLives), 10, 10, 24, BLUE);
+    // 也可以画红心
+    for (int i = 0; i < upperLives; ++i) {
+        DrawCircle(180 + i * 30, 30, 10, RED);
+        DrawCircle(177 + i * 30, 27, 4, MAROON);
+        DrawCircle(183 + i * 30, 27, 4, MAROON);
+    }
 
+    // 下方玩家 HUD（屏幕底部）
+    DrawRectangle(0, screenHeight - 60, screenWidth, 60, Fade(BLACK, 0.7f));
+    DrawText(TextFormat("LOWER LIVES: %d", lowerLives), 10, screenHeight - 50, 24, RED);
+    for (int i = 0; i < lowerLives; ++i) {
+        DrawCircle(180 + i * 30, screenHeight - 30, 10, RED);
+        DrawCircle(177 + i * 30, screenHeight - 33, 4, MAROON);
+        DrawCircle(183 + i * 30, screenHeight - 33, 4, MAROON);
+    }
+
+    // 技能效果显示（右侧）
+    int yOffset = 100;
+    for (const auto& eff : upperEffects) {
+        DrawText(TextFormat("UP: %s %.1f", eff->GetName().c_str(), eff->GetRemainingTime()), 
+                screenWidth - 250, yOffset, 18, BLUE);
+        yOffset += 22;
+    }
+    yOffset = screenHeight - 100;
+    for (const auto& eff : lowerEffects) {
+        DrawText(TextFormat("DN: %s %.1f", eff->GetName().c_str(), eff->GetRemainingTime()), 
+                screenWidth - 250, yOffset, 18, RED);
+        yOffset -= 22;
+    }
     int y = 40;
     for (const auto& eff : upperEffects) {
         DrawText(TextFormat("UP: %s %.1f", eff->GetName().c_str(), eff->GetRemainingTime()), 10, y, 20, BLUE);

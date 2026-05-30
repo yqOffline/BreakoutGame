@@ -79,6 +79,9 @@ private:
 
     void AddSnapshotToBuffer(const GameStateSnapshot& snap);
     void ApplyInterpolation(float renderTime);
+
+    float countdownTimer = 0.0f;
+    bool countdownActive = false;
 };
 
 #endif
