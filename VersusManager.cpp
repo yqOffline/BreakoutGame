@@ -1,41 +1,24 @@
 #include "VersusManager.h"
 #include "TextureCache.h"
 #include "EffectFactory.h"
-#include "VersusNetMessage.h"
 #include <iostream>
 #include <cstring>
-#include <enet/enet.h>
+#include <enet/enet.h>          // 只在 .cpp 中包含
 
-// 辅助 UI 函数（与 game.cpp 中一致）
-static void DrawRoundedRect(Rectangle rect, float radius, Color color) {
-    if (radius <= 0) {
-        DrawRectangleRec(rect, color);
-        return;
-    }
-    radius = fmin(radius, fmin(rect.width / 2.0f, rect.height / 2.0f));
-    DrawRectangle(rect.x + radius, rect.y, rect.width - radius * 2, rect.height, color);
-    DrawRectangle(rect.x, rect.y + radius, rect.width, rect.height - radius * 2, color);
-    DrawCircle(rect.x + radius, rect.y + radius, radius, color);
-    DrawCircle(rect.x + rect.width - radius, rect.y + radius, radius, color);
-    DrawCircle(rect.x + radius, rect.y + rect.height - radius, radius, color);
-    DrawCircle(rect.x + rect.width - radius, rect.y + rect.height - radius, radius, color);
+// ---------- 序列化辅助 ----------
+template <typename T>
+static std::vector<uint8_t> PackData(const T& obj) {
+    std::vector<uint8_t> vec(sizeof(T));
+    std::memcpy(vec.data(), &obj, sizeof(T));
+    return vec;
 }
 
-static bool IsPointInRect(Vector2 point, Rectangle rect) {
-    return point.x >= rect.x && point.x <= rect.x + rect.width &&
-           point.y >= rect.y && point.y <= rect.y + rect.height;
-}
-
-static void DrawButton(Rectangle rect, const char* text, int fontSize, Color normal, Color hover, Color pressed, bool isHover, bool isPressed) {
-    Color drawColor = normal;
-    if (isPressed) drawColor = pressed;
-    else if (isHover) drawColor = hover;
-    DrawRoundedRect(rect, 10.0f, drawColor);
-    DrawRectangleLinesEx(rect, 2, Fade(BLACK, 0.3f));
-    int tw = MeasureText(text, fontSize);
-    float tx = rect.x + (rect.width - tw) / 2;
-    float ty = rect.y + (rect.height - fontSize) / 2;
-    DrawText(text, tx, ty, fontSize, BLACK);
+template <typename T>
+static T UnpackData(const std::vector<uint8_t>& data) {
+    T obj{};
+    if (data.size() >= sizeof(T))
+        std::memcpy(&obj, data.data(), sizeof(T));
+    return obj;
 }
 
 // ---------- 构造函数 ----------
@@ -53,27 +36,23 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
     game.OnEffectRemoved = [this](EffectType t, bool up) { OnEffectRemoved(t, up); };
 
     game.OnSkillBallSpawned = [this](const SkillBall& sb) {
-        SkillBallSpawnMsg spawnMsg;
-        spawnMsg.type = VersusMsgType::SKILLBALL_SPAWN;
-        spawnMsg.posX = sb.GetPosition().x;
-        spawnMsg.posY = sb.GetPosition().y;
-        spawnMsg.speedY = sb.GetSpeed().y;
-        spawnMsg.skillType = static_cast<int32_t>(sb.skillType);
-        SendMessage(Serialize(spawnMsg), false);
+        SkillBallSpawnMsg msg;
+        msg.type = VersusMsgType::SKILLBALL_SPAWN;
+        msg.posX = sb.GetPosition().x;
+        msg.posY = sb.GetPosition().y;
+        msg.speedY = sb.GetSpeed().y;
+        msg.skillType = (int32_t)sb.skillType;
+        SendMessage(PackData(msg), false);
     };
 
     game.OnParticleSpawned = [this](Vector2 pos, Color col, int count, bool isBreak) {
-        ParticleSpawnMsg particleMsg;
-        particleMsg.type = VersusMsgType::PARTICLE_SPAWN;
-        particleMsg.posX = pos.x;
-        particleMsg.posY = pos.y;
-        particleMsg.r = col.r;
-        particleMsg.g = col.g;
-        particleMsg.b = col.b;
-        particleMsg.a = col.a;
-        particleMsg.count = count;
-        particleMsg.isBreak = isBreak ? 1 : 0;
-        SendMessage(Serialize(particleMsg), false);
+        ParticleSpawnMsg pmsg;
+        pmsg.type = VersusMsgType::PARTICLE_SPAWN;
+        pmsg.posX = pos.x; pmsg.posY = pos.y;
+        pmsg.r = col.r; pmsg.g = col.g; pmsg.b = col.b; pmsg.a = col.a;
+        pmsg.count = count;
+        pmsg.isBreak = isBreak ? 1 : 0;
+        SendMessage(PackData(pmsg), false);
     };
 
     game.LoadLevel(pendingSeed);
@@ -116,17 +95,14 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
                     case ENET_EVENT_TYPE_CONNECT:
                         peer = event.peer;
                         isConnected = true;
-                        (LOG_INFO, "Guest: Connected to host");
                         if (asHost) {
                             VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
-                            auto data = Serialize(seedMsg);
-                            ENetPacket* pkt = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_RELIABLE);
+                            ENetPacket* pkt = enet_packet_create(&seedMsg, sizeof(seedMsg), ENET_PACKET_FLAG_RELIABLE);
                             enet_peer_send(peer, 0, pkt);
                         }
                         break;
 
                     case ENET_EVENT_TYPE_RECEIVE: {
-                        (LOG_INFO, "Guest: Received packet, size=%d", event.packet->dataLength);
                         std::vector<uint8_t> data(event.packet->dataLength);
                         std::memcpy(data.data(), event.packet->data, event.packet->dataLength);
                         incomingQueue.push(std::move(data));
@@ -137,8 +113,7 @@ VersusManager::VersusManager(int ww, int wh, const json& cfg, bool asHost, const
                     case ENET_EVENT_TYPE_DISCONNECT:
                         peer = nullptr;
                         isConnected = false;
-                        (LOG_INFO, "Guest: Disconnected");
-                        incomingQueue.push({});
+                        incomingQueue.push({});   // 空包表示断开
                         break;
 
                     default: break;
@@ -175,7 +150,7 @@ VersusManager::~VersusManager() {
         networkThread.join();
 }
 
-// ---------- 发送消息 ----------
+// ---------- 发送消息（主线程安全） ----------
 void VersusManager::SendMessage(const std::vector<uint8_t>& data, bool reliable) {
     if (!isConnected) return;
     outgoingQueue.push({data, reliable});
@@ -187,15 +162,15 @@ void VersusManager::SendGameState() {
         float roll = (float)(GetRandomValue(0, 1000)) / 1000.0f;
         if (roll < packetLossRate) return;
     }
-    auto data = Serialize(snap);
-    SendMessage(data, false);
+    SendMessage(PackData(snap), false);
 }
 
-// ---------- 处理接收消息 ----------
+// ---------- 主线程处理接收消息 ----------
 void VersusManager::ProcessIncomingMessages() {
     std::vector<uint8_t> data;
     while (incomingQueue.try_pop(data)) {
         if (data.empty()) {
+            // 断开连接信号
             if (!drawResult) {
                 drawResult = true;
                 resultText = isHost ? "YOU WIN! OPPONENT LEFT" : "CONNECTION LOST";
@@ -207,88 +182,84 @@ void VersusManager::ProcessIncomingMessages() {
     }
 }
 
-// 成员函数实现
+// ---------- 解析并处理收到的数据包 ----------
 void VersusManager::HandleIncomingPacket(const std::vector<uint8_t>& data) {
-    // 尝试反序列化为 GameStateSnapshot
-    GameStateSnapshot snap;
-    if (Deserialize(data.data(), data.size(), snap)) {
-        if (!isHost && !gameStarted && snap.hostGameTime > 0.0f) {
-            (LOG_INFO, "Guest: Auto-starting on first snapshot with positive game time");
-            gameStarted = true;
-        }
+    if (data.size() == sizeof(GameStateSnapshot)) {
         if (!isHost) {
+            GameStateSnapshot snap = UnpackData<GameStateSnapshot>(data);
             AddSnapshotToBuffer(snap);
         }
         return;
     }
-    // 尝试反序列化为 SkillBallSpawnMsg
-    SkillBallSpawnMsg smsg;
-    if (Deserialize(data.data(), data.size(), smsg) && smsg.type == VersusMsgType::SKILLBALL_SPAWN) {
-        (LOG_INFO, "Guest: Received VersusNetMessage type = %d", (int)smsg.type);
-        SkillType type = static_cast<SkillType>(smsg.skillType);
-        Vector2 pos = { smsg.posX, smsg.posY };
-        Vector2 velocity = { 0.0f, smsg.speedY };
-        float radius = config["skill_ball"]["radius"].get<float>();
-        Color glow;
-        switch (type) {
-            case SkillType::PADDLE_EXTEND: glow = BLUE; break;
-            case SkillType::BALL_ENLARGE:  glow = GREEN; break;
-            case SkillType::BALL_SHRINK:   glow = RED; break;
-            case SkillType::EXPLOSION:     glow = ORANGE; break;
-            case SkillType::INVINCIBLE:    glow = GOLD; break;
-            case SkillType::SPLIT:         glow = SKYBLUE; break;
-            default: glow = WHITE;
-        }
-        SkillBall sb(pos, type, radius, velocity, glow);
-        game.AddSkillBall(sb);
-        return;
-    }
-    // 尝试反序列化为 ParticleSpawnMsg
-    ParticleSpawnMsg pmsg;
-    if (Deserialize(data.data(), data.size(), pmsg) && pmsg.type == VersusMsgType::PARTICLE_SPAWN) {
-        Vector2 pos = { pmsg.posX, pmsg.posY };
-        Color col = { pmsg.r, pmsg.g, pmsg.b, pmsg.a };
-        game.GetParticleSystem().EmitExplosion(pos, col, pmsg.count);
-        return;
-    }
-    // 尝试反序列化为 VersusNetMessage
-    VersusNetMessage msg;
-    if (Deserialize(data.data(), data.size(), msg)) {
-        switch (msg.type) {
-            case VersusMsgType::SEED:
-                if (!isHost) game.LoadLevel((unsigned int)msg.data1);
-                break;
-            case VersusMsgType::INPUT: {
-                int dir = msg.data1;
-                bool launch = (msg.data2 != 0);
-                if (isHost) {
-                    game.MovePaddle(false, dir);
-                    if (launch) game.TryLaunchBall(false);
-                }
-                break;
+    if (data.size() == sizeof(SkillBallSpawnMsg)) {
+        SkillBallSpawnMsg smsg = UnpackData<SkillBallSpawnMsg>(data);
+        if (smsg.type == VersusMsgType::SKILLBALL_SPAWN) {
+            SkillType type = static_cast<SkillType>(smsg.skillType);
+            Vector2 pos = { smsg.posX, smsg.posY };
+            Vector2 velocity = { 0.0f, smsg.speedY };
+            float radius = config["skill_ball"]["radius"].get<float>();
+            Color glow;
+            switch (type) {
+                case SkillType::PADDLE_EXTEND: glow = BLUE; break;
+                case SkillType::BALL_ENLARGE:  glow = GREEN; break;
+                case SkillType::BALL_SHRINK:   glow = RED; break;
+                case SkillType::EXPLOSION:     glow = ORANGE; break;
+                case SkillType::INVINCIBLE:    glow = GOLD; break;
+                case SkillType::SPLIT:         glow = SKYBLUE; break;
+                default: glow = WHITE; break;
             }
-            case VersusMsgType::CONTROL_START:
-                if (!isHost) {
-                    void HandleIncomingPacket(const std::vector<uint8_t>& data);
-                    gameStarted = true;
-                }
-                break;
-            case VersusMsgType::EFFECT_APPLIED: {
-                EffectType etype = (EffectType)msg.data1;
-                bool upper = (msg.data2 != 0);
-                auto effect = EffectFactory::CreateEffect(static_cast<SkillType>(etype));
-                if (effect) game.ApplyEffectToPlayer(std::move(effect), upper);
-                break;
-            }
-            case VersusMsgType::GAME_OVER: {
-                drawResult = true;
-                resultText = (msg.data1 == 1) ? "YOU LOSE!" : "YOU WIN!";
-                gameStarted = false;
-                break;
-            }
-            default: break;
+            SkillBall sb(pos, type, radius, velocity, glow);
+            game.AddSkillBall(sb);
         }
         return;
+    }
+    if (data.size() == sizeof(ParticleSpawnMsg)) {
+        ParticleSpawnMsg pmsg = UnpackData<ParticleSpawnMsg>(data);
+        if (pmsg.type == VersusMsgType::PARTICLE_SPAWN) {
+            Vector2 pos = { pmsg.posX, pmsg.posY };
+            Color col = { pmsg.r, pmsg.g, pmsg.b, pmsg.a };
+            game.GetParticleSystem().EmitExplosion(pos, col, pmsg.count);
+        }
+        return;
+    }
+    if (data.size() != sizeof(VersusNetMessage)) return;
+    VersusNetMessage msg = UnpackData<VersusNetMessage>(data);
+
+    switch (msg.type) {
+        case VersusMsgType::SEED:
+            if (!isHost) game.LoadLevel((unsigned int)msg.data1);
+            break;
+        case VersusMsgType::INPUT: {
+            int dir = msg.data1;
+            bool launch = (msg.data2 != 0);
+            if (isHost) {
+                game.MovePaddle(false, dir);
+                if (launch) game.TryLaunchBall(false);
+            }
+            break;
+        }
+        // 修改点：Guest 收到 CONTROL_START 时初始化并发射球
+        case VersusMsgType::CONTROL_START:
+            if (!isHost) {
+                gameStarted = true;
+                game.SetBallAttachedToUpper(false);
+                game.TryLaunchBall(false);
+            }
+            break;
+        case VersusMsgType::EFFECT_APPLIED: {
+            EffectType etype = (EffectType)msg.data1;
+            bool upper = (msg.data2 != 0);
+            auto effect = EffectFactory::CreateEffect(static_cast<SkillType>(etype));
+            if (effect) game.ApplyEffectToPlayer(std::move(effect), upper);
+            break;
+        }
+        case VersusMsgType::GAME_OVER: {
+            drawResult = true;
+            resultText = (msg.data1 == 1) ? "YOU LOSE!" : "YOU WIN!";
+            gameStarted = false;
+            break;
+        }
+        default: break;
     }
 }
 
@@ -305,7 +276,7 @@ void VersusManager::Update(float dt) {
                 int winner = (game.GetUpperLives() <= 0) ? 0 : 1;
                 int hostWin = (winner == 1) ? 1 : 0;
                 VersusNetMessage msg{ VersusMsgType::GAME_OVER, hostWin, 0, 0 };
-                SendMessage(Serialize(msg), true);
+                SendMessage(PackData(msg));
                 resultText = hostWin ? "YOU WIN!" : "YOU LOSE!";
                 gameStarted = false;
             }
@@ -322,7 +293,6 @@ void VersusManager::Update(float dt) {
 
 // ---------- HandleInput ----------
 void VersusManager::HandleInput() {
-    Vector2 mousePos = GetMousePosition();
     // 丢包模拟开关
     if (isHost && IsKeyPressed(KEY_K)) {
         simulatePacketLoss = !simulatePacketLoss;
@@ -337,26 +307,28 @@ void VersusManager::HandleInput() {
 
     if (drawResult) {
         if (IsKeyPressed(KEY_R)) {
-            // 重启逻辑...
+            gameStarted = false;
+            drawResult = false;
+            pendingSeed = (unsigned int)time(nullptr);
+            game.LoadLevel(pendingSeed);
+            snapshotBuffer.clear();
+            latestHostTime = 0.0f;
+            if (isHost) {
+                VersusNetMessage seedMsg{ VersusMsgType::SEED, (int32_t)pendingSeed, 0, 0 };
+                SendMessage(PackData(seedMsg));
+            }
         }
-        if (IsKeyPressed(KEY_B)) {
-            running = false;  // 返回大厅
-        }
-        // 鼠标点击处理
-        Rectangle backBtnRect = { winWidth / 2.0f - 100, winHeight / 2.0f + 110, 200, 50 };
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePos, backBtnRect)) {
-            running = false;
-        }
+        if (IsKeyPressed(KEY_B)) running = false;
         return;
     }
 
     if (!gameStarted) {
         if (isHost && isConnected) {
             if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE)) {
-                (LOG_INFO, "Host: Sending CONTROL_START");
                 gameStarted = true;
+                game.TryLaunchBall(true);   // 修改点：Host 发射球
                 VersusNetMessage startMsg{ VersusMsgType::CONTROL_START };
-                SendMessage(Serialize(startMsg), true);
+                SendMessage(PackData(startMsg));
             }
         }
         if (IsKeyPressed(KEY_B)) running = false;
@@ -374,12 +346,8 @@ void VersusManager::HandleInput() {
         game.MovePaddle(upper, dir);
         if (launch) game.TryLaunchBall(upper);
     } else {
-        VersusNetMessage inputMsg;
-        inputMsg.type = VersusMsgType::INPUT;
-        inputMsg.data1 = dir;
-        inputMsg.data2 = launch ? 1 : 0;
-        inputMsg.floatData = 0.0f;
-        SendMessage(Serialize(inputMsg), false);
+        VersusNetMessage inputMsg{ VersusMsgType::INPUT, dir, launch ? 1 : 0, 0 };
+        SendMessage(PackData(inputMsg), false);
     }
 }
 
@@ -398,125 +366,48 @@ void VersusManager::Draw() {
     }
 
     if (!gameStarted && !drawResult) {
-        int sw = winWidth;
-        int sh = winHeight;
-
-        // 背景图片
-        Texture2D bg = TextureCache::Instance().GetTexture("1.png");
-        if (bg.id != 0) {
-            DrawTexturePro(bg, {0,0,(float)bg.width,(float)bg.height},
-                        {0,0,(float)sw,(float)sh}, {0,0}, 0, WHITE);
+        DrawRectangle(0, winHeight/2 - 50, winWidth, 80, Fade(BLACK, 0.4f));
+        const char* status;
+        if (isHost) {
+            status = (isConnected && threadRunning) ? "Press S to start" : "Waiting for opponent...";
         } else {
-            ClearBackground(DARKGRAY);
+            status = (isConnected && threadRunning) ? "WAIT HOST TO START" : "Connecting to host...";
         }
-
-        // 半透明白色圆角面板
-        Rectangle panel = { sw/2.0f - 250, sh/2.0f - 150, 500, 300 };
-        DrawRectangleRounded(panel, 0.2f, 10, Fade(WHITE, 0.85f));
-        DrawRectangleLinesEx(panel, 2, BLACK);
-
-        DrawText("VERSUS LOBBY", sw/2 - 120, sh/2 - 110, 40, DARKBLUE);
-
-        // 角色
-        const char* roleText = isHost ? "HOST" : "GUEST";
-        Color roleColor = isHost ? BLUE : RED;
-        DrawText(TextFormat("You are: %s", roleText), sw/2 - 80, sh/2 - 60, 24, roleColor);
-
-        // 连接状态
-        bool connected = isConnected && threadRunning;
-        const char* status = connected ? (isHost ? "Opponent connected" : "Connected to host") : "Connecting...";
-        Color statusColor = connected ? GREEN : YELLOW;
-        DrawText(status, sw/2 - 100, sh/2 - 20, 22, statusColor);
-        DrawCircle(sw/2 - 120, sh/2 - 12, 8, statusColor);
-
-        // 开始按钮（仅 Host）
-        if (isHost && connected) {
-            Rectangle startBtnRect = { sw/2.0f - 80, sh/2.0f + 40, 160, 50 };
-            bool hover = CheckCollisionPointRec(GetMousePosition(), startBtnRect);
-            Color btnColor = hover ? DARKGREEN : GREEN;
-            DrawRectangleRounded(startBtnRect, 0.2f, 8, btnColor);
-            DrawRectangleLinesEx(startBtnRect, 2, BLACK);
-            DrawText("START GAME", startBtnRect.x + 20, startBtnRect.y + 12, 24, WHITE);
-            DrawText("Press S to start", sw/2 - 80, sh/2 + 100, 18, DARKGRAY);
-        } else if (!isHost && connected) {
-            DrawText("Waiting for host to start...", sw/2 - 140, sh/2 + 50, 20, DARKGRAY);
+        int tw = MeasureText(status, 30);
+        DrawText(status, winWidth/2 - tw/2, winHeight/2 - 35, 30, WHITE);
+        if (isHost && isConnected && threadRunning) {
+            DrawRectangleRec(startBtn, GREEN);
+            DrawText("START (S)", startBtn.x + 15, startBtn.y + 15, 20, BLACK);
         }
-
-        // 返回按钮
-        Rectangle backBtnRect = { sw/2.0f - 60, (float)sh - 70, 120, 50 };
-        bool hoverBack = CheckCollisionPointRec(GetMousePosition(), backBtnRect);
-        Color backColor = hoverBack ? DARKGRAY : GRAY;
-        DrawRectangleRounded(backBtnRect, 0.2f, 8, backColor);
-        DrawRectangleLinesEx(backBtnRect, 2, BLACK);
-        DrawText("BACK", backBtnRect.x + 35, backBtnRect.y + 12, 24, WHITE);
+        DrawRectangleRec(backBtn, GRAY);
+        DrawText("BACK (B)", backBtn.x + 20, backBtn.y + 15, 20, WHITE);
     }
 
     if (drawResult) {
-        int sw = winWidth;
-        int sh = winHeight;
-
-        // 背景图片
-        Texture2D bg = background;  // 已经加载的背景纹理，或重新加载
-        if (bg.id == 0) bg = TextureCache::Instance().GetTexture("1.png");
-        if (bg.id != 0) {
-            DrawTexturePro(bg, {0,0,(float)bg.width,(float)bg.height},
-                        {0,0,(float)sw,(float)sh}, {0,0}, 0, WHITE);
-        } else {
-            DrawRectangle(0, 0, sw, sh, DARKGRAY);
-        }
-
-        // 半透明白色圆角面板
-        Rectangle panel = { sw/2.0f - 250, sh/2.0f - 150, 500, 300 };
-        DrawRectangleRounded(panel, 0.2f, 10, Fade(WHITE, 0.85f));
-        DrawRectangleLinesEx(panel, 2, BLACK);
-
-        // 胜负文字
-        bool isWin = (resultText.find("WIN") != std::string::npos);
-        const char* text = isWin ? "YOU WIN!" : "YOU LOSE!";
-        Color textColor = isWin ? GOLD : RED;
-        int fontSize = 60;
-        int tw = MeasureText(text, fontSize);
-        DrawText(text, sw/2 - tw/2, sh/2 - 60, fontSize, textColor);
-
-        // 副文本（显示详细结果）
-        DrawText(resultText.c_str(), sw/2 - 100, sh/2 - 120, 28, DARKGRAY);
-
-        // 重启按钮
-        Rectangle restartBtnRect = { sw/2.0f - 100, sh/2.0f + 40, 200, 50 };
-        bool hoverRest = CheckCollisionPointRec(GetMousePosition(), restartBtnRect);
-        bool pressRest = IsMouseButtonDown(MOUSE_LEFT_BUTTON) && hoverRest;
-        Color btnColor = hoverRest ? DARKGREEN : GREEN;
-        DrawRectangleRounded(restartBtnRect, 0.2f, 8, btnColor);
-        DrawRectangleLinesEx(restartBtnRect, 2, BLACK);
-        DrawText("RESTART (R)", restartBtnRect.x + 30, restartBtnRect.y + 12, 24, WHITE);
-
-        // 返回按钮
-        Rectangle backBtnRect = { sw/2.0f - 100, sh/2.0f + 110, 200, 50 };
-        bool hoverBack = CheckCollisionPointRec(GetMousePosition(), backBtnRect);
-        bool pressBack = IsMouseButtonDown(MOUSE_LEFT_BUTTON) && hoverBack;
-        Color backColor = hoverBack ? DARKGRAY : GRAY;
-        DrawRectangleRounded(backBtnRect, 0.2f, 8, backColor);
-        DrawRectangleLinesEx(backBtnRect, 2, BLACK);
-        DrawText("BACK TO LOBBY (B)", backBtnRect.x + 15, backBtnRect.y + 12, 20, WHITE);
+        DrawRectangle(0, 0, winWidth, winHeight, Fade(BLACK, 0.8f));
+        int tw = MeasureText(resultText.c_str(), 50);
+        DrawText(resultText.c_str(), winWidth/2 - tw/2, winHeight/2 - 60, 50,
+                 resultText.find("WIN") != std::string::npos ? GOLD : RED);
+        DrawRectangleRec(restartBtn, GREEN);
+        DrawText("RESTART (R)", restartBtn.x + 10, restartBtn.y + 15, 20, BLACK);
+        DrawRectangleRec(backBtn, GRAY);
+        DrawText("BACK (B)", backBtn.x + 20, backBtn.y + 15, 20, WHITE);
     }
 }
 
 // ---------- 回调 ----------
 void VersusManager::OnLifeLost() {}
-
 void VersusManager::OnBallLaunched(bool isUpper) {
     VersusNetMessage msg{ VersusMsgType::BALL_LAUNCHED, isUpper ? 1 : 0, 0, 0 };
-    SendMessage(Serialize(msg), true);
+    SendMessage(PackData(msg));
 }
-
 void VersusManager::OnEffectApplied(EffectType type, bool upper) {
     VersusNetMessage msg{ VersusMsgType::EFFECT_APPLIED, (int32_t)type, upper ? 1 : 0, 0 };
-    SendMessage(Serialize(msg), true);
+    SendMessage(PackData(msg));
 }
-
 void VersusManager::OnEffectRemoved(EffectType type, bool upper) {
     VersusNetMessage msg{ VersusMsgType::EFFECT_REMOVED, (int32_t)type, upper ? 1 : 0, 0 };
-    SendMessage(Serialize(msg), true);
+    SendMessage(PackData(msg));
 }
 
 // ---------- 插值相关 ----------
@@ -557,5 +448,4 @@ void VersusManager::ApplyInterpolation(float renderTime) {
         if (t > 1.0f) t = 1.0f;
     }
     game.ApplyInterpolatedState(*prev, *next, t);
-    game.ApplyEffectsAndSkillBalls(*next);
 }

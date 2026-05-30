@@ -29,14 +29,12 @@ public:
 
     void MovePaddle(bool isUpper, int direction);
     void TryLaunchBall(bool isUpper);
+    void SetBallAttachedToUpper(bool upper) { ballAttachedToUpper = upper; }   // 新增
 
     GameStateSnapshot GetSnapshot() const;
     void ApplySnapshot(const GameStateSnapshot& snap);
     void ApplyInterpolatedState(const GameStateSnapshot& prev, const GameStateSnapshot& next, float t);
-    
-    // 离散同步效果和技能球（仅保留一次声明）
-    void ApplyEffectsAndSkillBalls(const GameStateSnapshot& snap);
-    
+
     void ApplyEffectToPlayer(std::unique_ptr<Effect> effect, bool upper);
     void UpdateEffects(float dt);
     void UpdateVisuals(float dt);

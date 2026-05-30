@@ -15,7 +15,6 @@
 
 using json = nlohmann::json;
 
-// 发送队列项
 struct SendItem {
     std::vector<uint8_t> data;
     bool reliable;
@@ -42,13 +41,11 @@ private:
     bool gameStarted;
     bool networkError;
 
-    // 网络线程
     std::thread networkThread;
     std::atomic<bool> threadRunning{false};
     std::atomic<bool> quitThread{false};
     std::atomic<bool> isConnected{false};
 
-    // 线程安全队列
     ThreadSafeQueue<std::vector<uint8_t>> incomingQueue;
     ThreadSafeQueue<SendItem> outgoingQueue;
 
@@ -68,13 +65,12 @@ private:
     bool drawResult;
     std::string resultText;
 
-    Rectangle startBtn;
-    Rectangle restartBtn;
-    Rectangle backBtn;
+    Rectangle startBtn;      // 必须存在
+    Rectangle restartBtn;    // 必须存在
+    Rectangle backBtn;       // 必须存在
 
     Texture2D background;
 
-    // 丢包模拟与插值
     bool simulatePacketLoss = false;
     float packetLossRate = 0.3f;
     std::deque<GameStateSnapshot> snapshotBuffer;
